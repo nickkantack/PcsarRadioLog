@@ -1,5 +1,6 @@
 
 import asyncio
+from asyncio.subprocess import PIPE
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
@@ -54,17 +55,29 @@ app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 @app.websocket("/stats_stream")
 async def stats_stream(ws: WebSocket):
-    global stat_index
     await ws.accept()
+
+    proc = await asyncio.create_subprocess_exec(
+        "./whisper-stream",
+        "-t", "6",
+        "-m", "./ggml-tiny.en.bin",
+        stdout=PIPE,
+        stderr=PIPE,
+    )
+
     try:
-        while True:
-            await ws.send_text(json.dumps({
-                "time": time.time()    
-            }))
-            await asyncio.sleep(1)
+        async for line in proc.stdout:
+            text = line.decode().rstrip()
+
+            await ws.send_json({
+                "text": text
+            })
+
     except Exception:
-        pass  # client disconnected
+        pass
     finally:
+        proc.kill()
+        await proc.wait()
         await ws.close()
 
 
