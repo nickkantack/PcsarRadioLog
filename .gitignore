@@ -1,0 +1,6 @@
+radio-log-venv/
+node_modules/
+
+notes.md
+backend/ggml-tiny.en.bin
+whisper-stream
