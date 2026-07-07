@@ -53,7 +53,7 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 
-@app.websocket("/stats_stream")
+@app.websocket("/transcription_stream")
 async def stats_stream(ws: WebSocket):
     await ws.accept()
 
@@ -68,10 +68,7 @@ async def stats_stream(ws: WebSocket):
     try:
         async for line in proc.stdout:
             text = line.decode().rstrip()
-
-            await ws.send_json({
-                "text": text
-            })
+            await ws.send_json(json.loads(text))
 
     except Exception:
         pass

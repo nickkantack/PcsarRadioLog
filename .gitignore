@@ -4,3 +4,5 @@ node_modules/
 notes.md
 backend/ggml-tiny.en.bin
 whisper-stream
+
+.DS_Store
