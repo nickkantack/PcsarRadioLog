@@ -1,0 +1,70 @@
+
+main {
+    display: flex;
+    flex-direction: column;
+    height: 90dvh;
+}
+
+.connectedStatus {
+    background: #9f9;
+    border: 1px solid #070;
+    color: #070;
+}
+.logListDiv {
+    border: 2px solid #999;
+    border-radius: 0.3em;
+    flex: 1;
+    overflow: scroll;
+}
+.logListEntryDiv {
+    border-bottom: 1px solid #999;
+    padding: 0.8em 0.5em 0.8em 0.5em;
+    display: flex;
+}
+.pendingStatus {
+  position: relative;
+  overflow: hidden;
+  color: #999;
+  background: #fff;
+}
+
+.pendingStatus::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -150%;
+  height: 100%;
+  width: 150%;
+
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #ddd,
+    transparent
+  );
+
+  animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer {
+  100% {
+    left: 100%;
+  }
+}
+
+.textCell {
+    flex: 1;
+    border-radius: 0.3em;
+    padding: 0.3em;
+    background: #ddd;
+    align-content: center;
+}
+.timeCell {
+    width: fit-content;
+    padding: 0.5em;
+}
+.topControls {
+    height: 2em;
+    padding: 0.5em;
+    display: flex;
+}

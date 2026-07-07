@@ -1,7 +1,15 @@
 <main class="main">
-  <div>
-    <div *ngFor="let segment of segmentsShowing">
-      <span>{{ segment.time }}</span>:<span>{{ segment.text }}</span>
+  <div class="topControls">
+    <div class="pendingStatus" style="align-content: center; margin-right: 1em; padding: 0.3em; border-radius: 0.3em;" [ngClass]="{ pendingStatus: !isConnectedToAudio, connectedStatus: isConnectedToAudio }" @expandCollapse>
+      {{ connectionText }}
+    </div>
+    <div class="pendingStatus" style="flex: 1; align-content: center; padding: 0.5em; border-radius: 0.3em;" *ngIf="isAudioIncoming" @expandCollapse>
+      Talking...
+    </div>
+  </div>
+  <div class="logListDiv">
+    <div class="logListEntryDiv" *ngFor="let segment of segmentsShowing; trackBy: trackByMessageContent" @expandCollapse>
+      <div class="timeCell">{{ segment.time }}</div><div class="textCell">{{ segment.text }}</div>
     </div>
   </div>
 </main>
