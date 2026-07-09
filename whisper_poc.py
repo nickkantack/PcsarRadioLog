@@ -4,6 +4,9 @@ import numpy as np
 import sounddevice as sd
 from pywhispercpp.model import Model
 
+for i, dev in enumerate(sd.query_devices()):
+    print(f"{i}: {dev['name']}")
+
 # Configuration parameters
 SAMPLE_RATE = 16000     # Whisper strictly requires 16kHz
 STEP_DURATION = 1.0     # Frequency of updates (how often it checks for new audio)
@@ -32,6 +35,7 @@ try:
             step_samples, 
             samplerate=SAMPLE_RATE, 
             channels=CHANNELS, 
+            device=0,
             dtype='float32'
         )
         sd.wait()
