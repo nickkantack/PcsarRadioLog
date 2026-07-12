@@ -6,3 +6,4 @@ backend/ggml-tiny.en.bin
 whisper-stream
 
 .DS_Store
+*.pyc
