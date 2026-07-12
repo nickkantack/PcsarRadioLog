@@ -11,7 +11,6 @@ def get_vad_state(
     pcmf32,
     sample_rate,
     nugget_ms,
-    freq_thold,
     verbose=False,
 ):
     pcmf32 = np.asarray(pcmf32, dtype=np.float32)

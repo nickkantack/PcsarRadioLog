@@ -22,10 +22,16 @@ MODEL_NAME = "tiny.en"
 AUDIO_BUFFER_MS = 20000
 DECISION_INTERVAL_MS = 2000
 
-PROMPT = (
-    'This is a transcript of radio chatter. '
-    'It often includes references to "SAR", acronym for Search and Rescue.'
-)
+PROMPT = """
+Fire dispatch, SAR 2 enroute to Hippy Hole.
+10-4
+Fire dispatch, Medic 6.
+Medic 6.
+Have we made contact with the reporting party?
+Negative, Medic 6. Still trying.
+Copy.
+(some time later)
+"""
 
 
 def emit(event_type, **fields):
@@ -35,6 +41,14 @@ def emit(event_type, **fields):
     }
     event.update(fields)
     print(json.dumps(event), flush=True)
+
+    # TODO have a client send the event over network is possible
+
+    # TODO emit transcription requests and have a separate python
+    # worker find the file, load the audio, run the transcription,
+    # and write the resulting transcription. This file should be
+    # responsible just for dropping audio files with logical
+    # separation of speech.
 
 
 print("Get the model")
@@ -72,7 +86,6 @@ try:
             recent,
             SAMPLE_RATE,
             250,
-            100.0,
             False,
         )
 
@@ -157,7 +170,7 @@ try:
             print(json.dumps(output), flush=True)
 
         if not found_segment:
-            print("No segments", flush=True)
+            # print("No segments", flush=True)
             is_speaking = False
 
         # Preserve the same behavior as the C++ version:
