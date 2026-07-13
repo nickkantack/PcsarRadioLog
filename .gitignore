@@ -8,3 +8,4 @@ whisper-stream
 .DS_Store
 *.pyc
 data/
+backend/data/

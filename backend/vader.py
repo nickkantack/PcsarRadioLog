@@ -56,7 +56,8 @@ try:
             recent,
             SAMPLE_RATE,
             250,
-            False,
+            is_speaking,
+            False
         )
 
         do_save = False

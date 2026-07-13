@@ -10,7 +10,7 @@ from faster_whisper import WhisperModel
 
 # Your existing implementations.
 # audio.get(ms) must return the most recent ms of float32 mono audio at 16 kHz.
-from audio_capture import AudioCapture
+from backend.audio_capture import AudioCapture
 
 # Your existing VAD implementation.
 from vad import get_vad_state, VadState

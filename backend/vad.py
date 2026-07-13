@@ -11,6 +11,7 @@ def get_vad_state(
     pcmf32,
     sample_rate,
     nugget_ms,
+    is_speaking,
     verbose=False,
 ):
     pcmf32 = np.asarray(pcmf32, dtype=np.float32)
@@ -43,11 +44,9 @@ def get_vad_state(
     )
 
     if verbose:
-        print("energies:", energies)
         print("var:", variance)
 
-    return (
-        VadState.SpeechPresent
-        if variance > 90
-        else VadState.SpeechAbsent
-    )
+    if is_speaking:
+        return VadState.SpeechPresent if variance < 10 else VadState.SpeechAbsent
+    else:
+        return VadState.SpeechPresent if variance > 30 else VadState.SpeechAbsent
