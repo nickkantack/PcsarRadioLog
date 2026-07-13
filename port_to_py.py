@@ -155,7 +155,7 @@ try:
                 "text": text + suffix,
             }
 
-            ident = f"segment_{int(time.time()*1000000)}_{uuid.uuid4()}"
+            ident = f"data/segment_{int(time.time()*1000000)}_{uuid.uuid4()}"
 
             sf.write(
                 ident + ".wav",
