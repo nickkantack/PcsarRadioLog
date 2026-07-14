@@ -10,6 +10,7 @@ import soundfile as sf
 
 from audio_capture import AudioCapture
 from vad import VadState, get_vad_state
+from common import emit_to_transcriber, emit_to_websocket
 
 
 SAMPLE_RATE = 16000
@@ -19,22 +20,10 @@ DECISION_INTERVAL_MS = 2000
 
 TRANSCRIBER_URL = "http://127.0.0.1:8000/transcribe"
 
-
-def emit(event_type, **fields):
-    event = {
-        "type": event_type,
-        "time": datetime.now().strftime("%F %T"),
-    }
-    event.update(fields)
-    print(json.dumps(event), flush=True)
-
-
 print("Running")
 
 audio = AudioCapture(AUDIO_BUFFER_MS)
 audio.resume()
-
-emit("InitializationEvent")
 
 is_speaking = False
 speech_start = time.monotonic()
@@ -66,13 +55,19 @@ try:
         if not is_speaking and vad_state == VadState.SpeechPresent:
             speech_start = now - DECISION_INTERVAL_MS / 1000
             is_speaking = True
-            emit("SpeechStartEvent")
+            emit_to_websocket({
+                "event_type": "SpeechStartEvent",
+                "time": datetime.now().strftime("%F %T")
+            })
             continue
 
         if is_speaking and vad_state == VadState.SpeechAbsent:
             is_speaking = False
             do_save = True
-            emit("SpeechStopEvent")
+            emit_to_websocket({
+                "event_type": "SpeechStopEvent",
+                "time": datetime.now().strftime("%F %T")
+            })
 
         elif (
             is_speaking
@@ -100,11 +95,12 @@ try:
 
         event_time = datetime.now().strftime("%F %T")
 
-        emit(
-            "TranscriptionQueuedEvent",
-            filename=wav_filename,
-            continuing=was_cut_off,
-        )
+        emit_to_transcriber({
+            "event_type": "TranscriptionQueuedEvent",
+            "time": datetime.now().strftime("%F %T"),
+            "filename": wav_filename,
+            "continuing": was_cut_off,
+        })
 
         try:
             requests.post(
@@ -116,11 +112,12 @@ try:
                 timeout=0.5,
             )
         except Exception as e:
-            emit(
-                "TranscriptionQueueFailedEvent",
-                filename=wav_filename,
-                error=str(e),
-            )
+            emit_to_transcriber({
+                "event_type": "TranscriptionQueuedFailedEvent",
+                "time": datetime.now().strftime("%F %T"),
+                "filename": wav_filename,
+                "error": str(e),
+            })
 
         speech_start = time.monotonic()
 

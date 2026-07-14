@@ -38,14 +38,16 @@ export class AppComponent {
 
     constructor() {
         this.ws = new WebSocket(`ws://${location.hostname}:3011/transcription_stream`);
+        this.ws.onopen = () => {
+            this.connectionText = "Connected";
+            this.isConnectedToAudio = true;
+        };
         this.ws.onmessage = (event: any) => {
             const transcriptionEvent: TranscriptionEvent = JSON.parse(event.data);
             console.log(transcriptionEvent);
             switch (transcriptionEvent.type) {
                 case TranscriptionEventType.INITIALIZATION_EVENT:
                     // TODO anything to start transcription
-                    this.connectionText = "Connected";
-                    this.isConnectedToAudio = true;
                     break;
                 case TranscriptionEventType.SPEECH_START_EVENT:
                     this.isAudioIncoming = true;

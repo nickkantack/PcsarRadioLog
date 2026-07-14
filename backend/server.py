@@ -18,6 +18,9 @@ BASE_DIR = os.getcwd()
 
 should_stop_camera_thread = False
 
+# Global list to keep track of connected websocket clients
+active_websocket_connections = set()
+
 # ---------------------------------------------------------------------
 # --------------------------- Payload models --------------------------
 # ---------------------------------------------------------------------
@@ -34,6 +37,26 @@ def camera_worker():
     print("Starting the camera worker")
     while not should_stop_camera_thread:
         time.sleep(1)
+
+async def broadcast_to_websockets(data):
+    """Broadcast data to all active websocket connections"""
+    disconnected = set()
+    for ws in active_websocket_connections:
+        try:
+            print("Sending websocket event")
+            await ws.send_json(data)
+        except Exception:
+            # Keep track of disconnected clients to remove them
+            disconnected.add(ws)
+    
+    # Remove disconnected clients
+    for ws in disconnected:
+        active_websocket_connections.discard(ws)
+
+
+# We don't need a synchronous version since we're using the HTTP endpoint
+# which properly handles the async broadcasting
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -56,25 +79,16 @@ app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 @app.websocket("/transcription_stream")
 async def stats_stream(ws: WebSocket):
     await ws.accept()
-
-    proc = await asyncio.create_subprocess_exec(
-        "./whisper-stream",
-        "-t", "6",
-        "-m", "./ggml-tiny.en.bin",
-        stdout=PIPE,
-        stderr=PIPE,
-    )
-
+    active_websocket_connections.add(ws)
+    
     try:
-        async for line in proc.stdout:
-            text = line.decode().rstrip()
-            await ws.send_json(json.loads(text))
-
+        while True:
+            # Keep the connection alive
+            await asyncio.sleep(1)
     except Exception:
         pass
     finally:
-        proc.kill()
-        await proc.wait()
+        active_websocket_connections.discard(ws)
         await ws.close()
 
 
@@ -82,6 +96,12 @@ async def stats_stream(ws: WebSocket):
 async def root():
     filepath = os.path.join(BASE_DIR, "index.html")
     return FileResponse(filepath)
+
+
+@app.post("/event")
+async def receive_event(event_data: dict):
+    await broadcast_to_websockets(event_data)
+    return {"status": "ok"}
 
 
 @app.get("/{path:path}")

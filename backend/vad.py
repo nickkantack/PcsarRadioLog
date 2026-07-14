@@ -32,9 +32,6 @@ def get_vad_state(
 
         nugget_energies.append(energy)
 
-        if verbose:
-            print(energy)
-
     energies = np.array(nugget_energies)
 
     overall_mean_energy = np.mean(energies)

@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
 import uvicorn
+from common import emit_to_websocket
 
 MODEL_NAME = "tiny.en"
 
@@ -52,7 +53,6 @@ def transcriber_worker():
             continue
 
         filename = job["filename"]
-        timestamp = job.get("timestamp")
 
         try:
             segments, info = model.transcribe(
@@ -71,8 +71,7 @@ def transcriber_worker():
 
             output = {
                 "type": "SegmentEvent",
-                "time": timestamp
-                or datetime.now().strftime("%F %T"),
+                "time": datetime.now().strftime("%F %T"),
                 "text": text,
             }
 
@@ -81,7 +80,7 @@ def transcriber_worker():
             with open(out_file, "w") as f:
                 json.dump(output, f)
 
-            print(json.dumps(output), flush=True)
+            emit_to_websocket(output)
 
         except Exception as e:
             print(f"Failed to transcribe {filename}: {e}")
