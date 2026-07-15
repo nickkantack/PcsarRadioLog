@@ -70,17 +70,24 @@ def transcriber_worker():
             )
 
             output = {
-                "type": "SegmentEvent",
+                "event_type": "SegmentEvent",
                 "time": datetime.now().strftime("%F %T"),
                 "text": text,
+                "audio": filename
             }
 
-            out_file = Path(filename).with_suffix(".txt")
+            if len(text) == 0:
+                if Path(filename).exists():
+                    os.remove(filename)
+                else:
+                    print("Couldn't remove audio. File wasn't present.")
+            else:
+                out_file = Path(filename).with_suffix(".txt")
 
-            with open(out_file, "w") as f:
-                json.dump(output, f)
+                with open(out_file, "w") as f:
+                    json.dump(output, f)
 
-            emit_to_websocket(output)
+                emit_to_websocket(output)
 
         except Exception as e:
             print(f"Failed to transcribe {filename}: {e}")

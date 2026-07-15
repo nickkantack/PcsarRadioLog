@@ -3,6 +3,7 @@ import { RouterOutlet } from '@angular/router';
 import { SegmentEvent, TranscriptionEvent, TranscriptionEventType } from './constants';
 import { CommonModule } from '@angular/common';
 import { animate, style, transition, trigger } from '@angular/animations';
+import { HttpClient } from '@angular/common/http';
 
 @Component({
     selector: 'app-root',
@@ -36,7 +37,21 @@ export class AppComponent {
     isConnectedToAudio: boolean = false;
     connectionText: string = "Connecting to audio...";
 
-    constructor() {
+    constructor(
+        private http: HttpClient
+    ) {
+
+        this.http.get<any>('http://192.168.1.211:3011/event_buffer')
+            .subscribe({
+                next: (response) => {
+                    console.log(response);
+                    this.segmentsShowing = response;
+                },
+                error: (err) => {
+                    console.error('Failed to load recent transcriptions', err);
+                }
+            });
+
         this.ws = new WebSocket(`ws://${location.hostname}:3011/transcription_stream`);
         this.ws.onopen = () => {
             this.connectionText = "Connected";
@@ -45,7 +60,7 @@ export class AppComponent {
         this.ws.onmessage = (event: any) => {
             const transcriptionEvent: TranscriptionEvent = JSON.parse(event.data);
             console.log(transcriptionEvent);
-            switch (transcriptionEvent.type) {
+            switch (transcriptionEvent.event_type) {
                 case TranscriptionEventType.INITIALIZATION_EVENT:
                     // TODO anything to start transcription
                     break;

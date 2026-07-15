@@ -1,7 +1,7 @@
 
 export interface TranscriptionEvent {
 
-    type: string,
+    event_type: string,
     time: string,
     sourceId: string
 
@@ -21,6 +21,7 @@ export class TranscriptionEventType {
 export interface SegmentEvent extends TranscriptionEvent {
 
     text: string,
+    audio: string,
     isCutoff?: false,
 
 }

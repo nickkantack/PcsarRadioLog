@@ -9,3 +9,8 @@ whisper-stream
 *.pyc
 data/
 backend/data/
+
+backend/*.html
+backend/*.js
+backend/*.css
+backend/*.ico

@@ -9,7 +9,13 @@
   </div>
   <div class="logListDiv">
     <div class="logListEntryDiv" *ngFor="let segment of segmentsShowing; trackBy: trackByMessageContent" @expandCollapse>
-      <div class="timeCell">{{ segment.time }}</div><div class="textCell">{{ segment.text }}</div>
+      <div>
+        <div class="timeCell">{{ segment.time }}</div>
+      </div>
+      <div class="logListEntryDivTopRow">
+        <div class="textCell">{{ segment.text }}</div>
+      </div>
+      <audio [src]="segment.audio" controls></audio>
     </div>
   </div>
 </main>
