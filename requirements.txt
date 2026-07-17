@@ -1,5 +1,10 @@
 asyncio
 fastapi
+g2p-en
 httpx
 numpy
+panphon
+sentencepiece
+torch 
+transformers 
 uvicorn[standard]
