@@ -20,115 +20,40 @@ This script shows:
 """
 
 from __future__ import annotations
-
+from g2p_en import G2p
+import gc
+import panphon.distance
+import time
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
+gc.collect()
+torch.cuda.empty_cache()
+torch.cuda.ipc_collect()
 
-MODEL_NAME = "google/byt5-base"
-# DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DEVICE = "cpu"
+print(torch.cuda.memory_allocated() / 1024**2, "MB allocated")
+print(torch.cuda.memory_reserved() / 1024**2, "MB reserved")
+
+MODEL_NAME = "google/flan-t5-small"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Device is {DEVICE}")
 MAX_CANDIDATES = 5
 MIN_CANDIDATE_SCORE = 0.55
 INSERT_DELETE_COST = 1.0
 
+_panphon_distance = panphon.distance.Distance()
 
-_ARPABET_FEATURES = {
-    # Coarse fallback features for the ARPAbet output produced by g2p-en.
-    # PanPhon is preferred when available; this keeps the example useful without it.
-    "AA": {"vowel", "low", "back"},
-    "AE": {"vowel", "low", "front"},
-    "AH": {"vowel", "mid", "central"},
-    "AO": {"vowel", "mid", "back", "round"},
-    "AW": {"vowel", "diphthong", "low", "back"},
-    "AY": {"vowel", "diphthong", "low", "front"},
-    "B": {"consonant", "bilabial", "stop", "voiced"},
-    "CH": {"consonant", "postalveolar", "affricate", "voiceless"},
-    "D": {"consonant", "alveolar", "stop", "voiced"},
-    "DH": {"consonant", "dental", "fricative", "voiced"},
-    "EH": {"vowel", "mid", "front"},
-    "ER": {"vowel", "rhotic", "central"},
-    "EY": {"vowel", "diphthong", "mid", "front"},
-    "F": {"consonant", "labiodental", "fricative", "voiceless"},
-    "G": {"consonant", "velar", "stop", "voiced"},
-    "HH": {"consonant", "glottal", "fricative", "voiceless"},
-    "IH": {"vowel", "high", "front"},
-    "IY": {"vowel", "high", "front", "tense"},
-    "JH": {"consonant", "postalveolar", "affricate", "voiced"},
-    "K": {"consonant", "velar", "stop", "voiceless"},
-    "L": {"consonant", "alveolar", "liquid", "voiced"},
-    "M": {"consonant", "bilabial", "nasal", "voiced"},
-    "N": {"consonant", "alveolar", "nasal", "voiced"},
-    "NG": {"consonant", "velar", "nasal", "voiced"},
-    "OW": {"vowel", "diphthong", "mid", "back", "round"},
-    "OY": {"vowel", "diphthong", "back", "round"},
-    "P": {"consonant", "bilabial", "stop", "voiceless"},
-    "R": {"consonant", "postalveolar", "liquid", "voiced"},
-    "S": {"consonant", "alveolar", "fricative", "voiceless"},
-    "SH": {"consonant", "postalveolar", "fricative", "voiceless"},
-    "T": {"consonant", "alveolar", "stop", "voiceless"},
-    "TH": {"consonant", "dental", "fricative", "voiceless"},
-    "UH": {"vowel", "high", "back", "round"},
-    "UW": {"vowel", "high", "back", "round", "tense"},
-    "V": {"consonant", "labiodental", "fricative", "voiced"},
-    "W": {"consonant", "labial-velar", "glide", "voiced"},
-    "Y": {"consonant", "palatal", "glide", "voiced"},
-    "Z": {"consonant", "alveolar", "fricative", "voiced"},
-    "ZH": {"consonant", "postalveolar", "fricative", "voiced"},
-}
+_g2p = G2p()
 
+def text_to_phonemes(text: str) -> str:
+    phones = _g2p(text)
+    return " ".join(piece for piece in phones if piece.strip())
 
-try:
-    import panphon.distance
-
-    _panphon_distance = panphon.distance.Distance()
-except Exception:
-    _panphon_distance = None
-
-
-try:
-    from g2p_en import G2p
-
-    _g2p = G2p()
-
-    def text_to_phonemes(text: str) -> str:
-        phones = _g2p(text)
-        return " ".join(piece for piece in phones if piece.strip())
-
-except Exception:
-    # Tiny fallback so the example is self-contained. Use g2p-en in real code.
-    _FAKE_PHONES = {
-        "the": "DH AH",
-        "patient": "P EY SH AH N T",
-        "takes": "T EY K S",
-        "low": "L OW",
-        "sartin": "S AA R T AH N",
-        "losartan": "L OW S AA R T AH N",
-        "lisinopril": "L AY S IH N AH P R IH L",
-        "loratadine": "L AO R AH T AH D IY N",
-        "daily": "D EY L IY",
-    }
-
-    def text_to_phonemes(text: str) -> str:
-        return " ".join(_FAKE_PHONES.get(word.lower(), word.upper()) for word in text.split())
 
 
 def normalize_phone(phone: str) -> str:
     """Remove ARPAbet stress digits, e.g. AH0 -> AH."""
     return "".join(char for char in phone.upper() if not char.isdigit())
-
-
-def fallback_phoneme_substitution_cost(left: str, right: str) -> float:
-    """Feature-overlap cost for ARPAbet phones when PanPhon is unavailable."""
-    left_features = _ARPABET_FEATURES.get(normalize_phone(left))
-    right_features = _ARPABET_FEATURES.get(normalize_phone(right))
-
-    if left_features is None or right_features is None:
-        return INSERT_DELETE_COST
-
-    intersection = len(left_features & right_features)
-    union = len(left_features | right_features)
-    return 1.0 - intersection / union
 
 
 def phoneme_substitution_cost(left: str, right: str) -> float:
@@ -145,12 +70,7 @@ def phoneme_substitution_cost(left: str, right: str) -> float:
         return 0.0
 
     if _panphon_distance is not None:
-        try:
-            return min(1.0, float(_panphon_distance.feature_edit_distance(left, right)))
-        except Exception:
-            pass
-
-    return fallback_phoneme_substitution_cost(left, right)
+        return min(1.0, float(_panphon_distance.feature_edit_distance(left, right)))
 
 
 def phoneme_alignment_cost(left: list[str], right: list[str]) -> float:
@@ -218,21 +138,18 @@ def format_input(record: dict[str, object]) -> str:
     phones = text_to_phonemes(whisper_text)
     domain_terms = list(record.get("domain_terms", []))
     candidates = retrieve_phonetic_candidates(whisper_text, domain_terms)
-    candidate_text = ", ".join(f"{term} ({score:.2f})" for term, score in candidates)
+    candidate_text = ", ".join(f"{term[0]}" for term in candidates)
 
     return (
         "Correct ASR errors. Return only the corrected transcript.\n"
-        f"ASR: {whisper_text}\n"
-        f"PHONES: {phones}\n"
-        f"PHONETIC_CANDIDATES: {candidate_text}\n"
-        "CORRECTED:"
+        f"UNCORRECTED: {whisper_text}\n"
+        f"POSSIBLE WORDS: {candidate_text}\n"
     )
 
 
 def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME).to(DEVICE)
-
+    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME, torch_dtype=torch.float16).to(DEVICE)
     record = {
         "whisper_text": "the patient takes low sartin daily",
         "corrected_text": "the patient takes losartan daily",
@@ -269,8 +186,10 @@ def main() -> None:
     optimizer.zero_grad(set_to_none=True)
     output = model(**inputs, labels=labels)
     loss = output.loss
+    backprop_start_time = time.time()
     loss.backward()
     optimizer.step()
+    print(f"Backprop took {time.time() - backprop_start_time} seconds")
 
     print("\nONE-STEP TRAINING LOSS:", float(loss.detach().cpu()))
 
