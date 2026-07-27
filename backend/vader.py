@@ -47,9 +47,11 @@ try:
             is_speaking,
             False
         )
+        # vad_state = VadState.SpeechPresent if has_speech(recent, SAMPLE_RATE) else VadState.SpeechAbsent
 
         do_save = False
         was_cut_off = False
+        decision_interval_is_silent = False
 
         if not is_speaking and vad_state == VadState.SpeechPresent:
             speech_start = now - DECISION_INTERVAL_MS / 1000 / 2
@@ -64,6 +66,7 @@ try:
         if is_speaking and vad_state == VadState.SpeechAbsent and now > is_speaking_unlocks_at:
             is_speaking = False
             do_save = True
+            decision_interval_is_silent = True
             emit_to_websocket({
                 "event_type": "SpeechStopEvent",
                 "time": datetime.now().strftime("%F %T")
@@ -85,6 +88,11 @@ try:
         duration_ms = int((now - speech_start) * 1000)
         pcm = audio.get(min(duration_ms, AUDIO_BUFFER_MS))
 
+        if decision_interval_is_silent:
+            # Chop off the last 80% of the last DECISION_INTERVAL_MS of audio
+            # because the last DECISION_INTERVAL_MS of audio is presumed blank.
+            pcm = pcm[:int(-SAMPLE_RATE * DECISION_INTERVAL_MS / 1000 * 0.8)]
+
         ident = f"data/segment_{int(time.time()*1000000)}_{uuid.uuid4()}"
         wav_filename = ident + ".wav"
 
@@ -101,7 +109,7 @@ try:
             "event_type": "TranscriptionQueuedEvent",
             "time": datetime.now().strftime("%F %T"),
             "filename": wav_filename,
-            "continuing": was_cut_off,
+            "continuing": was_cut_off
         })
 
         speech_start = time.monotonic()

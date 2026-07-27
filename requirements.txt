@@ -6,5 +6,7 @@ numpy
 panphon
 sentencepiece
 torch 
+torchaudio
+torchcodec
 transformers 
 uvicorn[standard]

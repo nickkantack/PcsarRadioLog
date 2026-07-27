@@ -2,8 +2,9 @@ from collections import deque
 import math
 import numpy as np
 from enum import Enum
+import torch
 
-mean_energy_buffer = deque(maxlen=50)
+mean_energy_buffer = deque(maxlen=100)
 
 min_variance_ever_seen = None
 
@@ -21,34 +22,8 @@ def get_vad_state(
 ):
     pcmf32 = np.asarray(pcmf32, dtype=np.float32)
 
-    nugget_samples = int(sample_rate * nugget_ms / 1000)
-    num_whole_nuggets = len(pcmf32) // nugget_samples
-
-    if num_whole_nuggets == 0:
-        return VadState.SpeechAbsent
-
-    nugget_energies = []
-
-    for i in range(num_whole_nuggets):
-        start = i * nugget_samples
-        end = start + nugget_samples
-
-        energy = np.sum(np.abs(pcmf32[start:end]))
-
-        nugget_energies.append(energy)
-
-    energies = np.array(nugget_energies)
-
-    overall_mean_energy = np.mean(energies)
-
+    overall_mean_energy = np.mean(np.abs(pcmf32))
     mean_energy_buffer.append(overall_mean_energy)
-
-    variance = np.sum(
-        (energies - overall_mean_energy)**2
-    )
-
-    if verbose:
-        print("var:", variance)
 
     """
     Latest VAD theory:
@@ -74,7 +49,8 @@ def get_vad_state(
     """
 
     sorted_means = sorted(list(mean_energy_buffer))
-    threshold = 2 * sorted_means[math.floor(0.05 * len(mean_energy_buffer))]
+    threshold = 2 * sorted_means[math.floor(0.05 * len(mean_energy_buffer))] if is_speaking else \
+        4 * sorted_means[math.floor(0.05 * len(mean_energy_buffer))]
 
     # print(f"Comparing {overall_mean_energy} to {threshold}")
 
