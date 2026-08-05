@@ -1,5 +1,6 @@
 radio-log-venv/
 node_modules/
+research/runs/
 
 notes.md
 backend/ggml-tiny.en.bin

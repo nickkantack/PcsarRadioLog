@@ -3,12 +3,13 @@ import asyncio
 from asyncio.subprocess import PIPE
 from collections import deque
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import json
 import os
+from pathlib import Path
 from pydantic import BaseModel
 import threading
 import time
@@ -28,9 +29,8 @@ active_websocket_connections = set()
 # --------------------------- Payload models --------------------------
 # ---------------------------------------------------------------------
 
-
-class ArduinoCommand(BaseModel):
-    command_string: str
+class SaveRequest(BaseModel):
+    json: dict
 
 # ---------------------------------------------------------------------
 # --------------------------- Worker logic ----------------------------
@@ -122,6 +122,43 @@ async def receive_event(event_data: dict):
         segments_buffer.appendleft(event_data)
     await broadcast_to_websockets(event_data)
     return {"status": "ok"}
+
+
+@app.get("/label/files")
+def label_files():
+    ids = sorted(p.stem for p in Path("data").glob("*.wav"))
+    return ids
+
+
+@app.get("/label/item/{item_id}")
+def label_item(item_id: str):
+    txt = Path(f"data/{item_id}.txt")
+    wav = Path(f"data/{item_id}.wav")
+
+    if not txt.exists() or not wav.exists():
+        raise HTTPException(status_code=404)
+
+    with txt.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    return {
+        "id": item_id,
+        "json": payload,
+        "audio": f"/data/{wav.name}",
+    }
+
+
+@app.post("/label/item/{item_id}")
+def save_label(item_id: str, req: SaveRequest):
+    txt = Path(f"data/{item_id}.txt")
+
+    if not txt.exists():
+        raise HTTPException(status_code=404)
+
+    with txt.open("w", encoding="utf-8") as f:
+        json.dump(req.json, f, indent=2, ensure_ascii=False)
+
+    return {"ok": True}
 
 
 @app.get("/{path:path}")
