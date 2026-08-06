@@ -2,11 +2,13 @@
 
 import json
 import os
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torchaudio
+from torchinfo import summary
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
@@ -19,6 +21,8 @@ from transformers import (
 VALIDATION_SPLIT = 0.2  # 20% for validation, 80% for training
 writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 
+EPOCH_TO_LOAD = 9
+
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 2
 CHUNK_SAMPLES = SAMPLE_RATE * CHUNK_SECONDS
@@ -26,13 +30,85 @@ CHUNK_SAMPLES = SAMPLE_RATE * CHUNK_SECONDS
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 class Denoiser(nn.Module):
-    def __init__(self):
+    def __init__(self, channels=(80, 64, 32, 16)):
         super().__init__()
 
-        self.net = nn.Conv1d(80, 80, kernel_size=3, padding=1)
+        # Encoder
+        self.encoder = nn.ModuleList([
+            nn.Conv1d(in_ch, out_ch, kernel_size=3, padding=1)
+            for in_ch, out_ch in zip(channels[:-1], channels[1:])
+        ])
+
+        # Bottleneck
+        self.bottleneck = nn.Conv1d(
+            channels[-1],
+            channels[-1],
+            kernel_size=3,
+            padding=1,
+        )
+
+        # Decoder
+        #
+        # Encoder outputs (skip connections):
+        # [64, 32, 16]
+        #
+        # Decoder:
+        # (16+16)->16
+        # (16+32)->32
+        # (32+64)->64
+        #
+        skip_channels = list(channels[1:])
+        skip_channels.reverse()
+
+        decoder = []
+        current_channels = channels[-1]
+
+        for skip_ch in skip_channels:
+            decoder.append(
+                nn.Conv1d(
+                    current_channels + skip_ch,
+                    skip_ch,
+                    kernel_size=3,
+                    padding=1,
+                )
+            )
+            current_channels = skip_ch
+
+        self.decoder = nn.ModuleList(decoder)
+
+        # Restore original feature dimension
+        self.final = nn.Conv1d(channels[1], channels[0], kernel_size=1)
+
+        self.pool = nn.MaxPool1d(2)
+        self.up = nn.Upsample(scale_factor=2, mode="nearest")
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
-        return self.net(x)
+        skips = []
+
+        # Encoder
+        for layer in self.encoder:
+            x = self.relu(layer(x))
+            skips.append(x)
+            x = self.pool(x)
+
+        # Bottleneck
+        x = self.relu(self.bottleneck(x))
+
+        # Decoder
+        for layer, skip in zip(self.decoder, reversed(skips)):
+            x = self.up(x)
+
+            # Match temporal dimensions
+            if x.size(-1) > skip.size(-1):
+                x = x[..., :skip.size(-1)]
+            elif x.size(-1) < skip.size(-1):
+                skip = skip[..., :x.size(-1)]
+
+            x = torch.cat((x, skip), dim=1)
+            x = self.relu(layer(x))
+
+        return self.final(x)
 
 
 class AudioDataset(Dataset):
@@ -89,18 +165,30 @@ def collate(batch):
     return waveforms, texts
 
 
-def chunk_audio(wave):
+MEL_CHUNK = 200  # 2 seconds ≈ 200 frames
+def chunk_mel(mel, chunk_size=MEL_CHUNK):
+    """
+    mel: (1, 80, T)
+
+    returns list of (1,80,chunk_size)
+    """
+
     chunks = []
-    pos = 0
-    while pos < len(wave):
-        c = wave[pos:pos + CHUNK_SAMPLES]
-        if len(c) < CHUNK_SAMPLES:
-            c = torch.nn.functional.pad(c, (0, CHUNK_SAMPLES - len(c)))
+
+    T = mel.size(-1)
+
+    for start in range(0, T, chunk_size):
+        c = mel[..., start:start + chunk_size]
+
+        if c.size(-1) < chunk_size:
+            c = torch.nn.functional.pad(
+                c,
+                (0, chunk_size - c.size(-1))
+            )
+
         chunks.append(c)
-        pos += CHUNK_SAMPLES
-    if len(chunks) == 0:
-        chunks.append(torch.zeros(CHUNK_SAMPLES))
-    return chunks
+
+    return chunks, T
 
 
 def validate(model, val_loader, processor, whisper, device, global_step):
@@ -112,37 +200,38 @@ def validate(model, val_loader, processor, whisper, device, global_step):
     with torch.no_grad():
         for waveforms, texts in val_loader:
             for waveform, transcript in zip(waveforms, texts):
-                # Split entire waveform into chunks
-                chunks = chunk_audio(waveform)
-                
-                # Process all chunks through denoiser
-                processed_mels = []
+                features = processor.feature_extractor(
+                    waveform.numpy(),
+                    sampling_rate=SAMPLE_RATE,
+                    return_tensors="pt",
+                )
+
+                mel = features.input_features.to(DEVICE)
+
+                chunks, original_length = chunk_mel(mel)
+
+                processed = []
+
                 for chunk in chunks:
-                    # Whisper feature extraction
-                    features = processor.feature_extractor(
-                        chunk.numpy(),
-                        sampling_rate=SAMPLE_RATE,
-                        return_tensors="pt",
-                    )
-                    
-                    mel = features.input_features.to(device)
-                    # Apply denoising
-                    denoised_mel = model(mel)
-                    processed_mels.append(denoised_mel)
-                
-                # Concatenate processed mel spectrograms along time dimension
-                if len(processed_mels) > 1:
-                    combined_mel = torch.cat(processed_mels, dim=2)  # Concatenate along time axis
-                else:
-                    combined_mel = processed_mels[0]
-                
-                # Transcribe the entire denoised audio
-                labels = processor.tokenizer(transcript, return_tensors="pt").input_ids.to(device)
-                
+                    processed.append(model(chunk))
+
+                combined_mel = torch.cat(processed, dim=-1)
+
+                # Remove padding added by chunk_mel()
+                combined_mel = combined_mel[..., :original_length]
+
+                labels = processor.tokenizer(
+                    transcript,
+                    return_tensors="pt",
+                ).input_ids.to(DEVICE)
+
                 with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-                    outputs = whisper(input_features=combined_mel, labels=labels)
+                    outputs = whisper(
+                        input_features=combined_mel,
+                        labels=labels,
+                    )
                     loss = outputs.loss
-                
+
                 total_val_loss += loss.item()
                 num_batches += 1
     
@@ -151,10 +240,17 @@ def validate(model, val_loader, processor, whisper, device, global_step):
     return avg_val_loss
 
 
-def main():
+def train(denoiser, optimizer, processor):
+
+    # Print model summary early
+    """
+    denoiser_temp = Denoiser()
+    summary(denoiser_temp, input_size=(1, 80, 2000))  # Assuming ~1500 time steps for 2-second audio
+    del denoiser_temp
+    print("\n")
+    """
 
     base_model = "openai/whisper-tiny.en"
-    processor = WhisperProcessor.from_pretrained(base_model)
     whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
     whisper.eval()  # Keep whisper in eval mode since we're not training it
 
@@ -162,8 +258,7 @@ def main():
     for p in whisper.parameters():
         p.requires_grad = False
 
-    denoiser = Denoiser().to(DEVICE)
-    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-5)
+    starting_epoch = EPOCH_TO_LOAD if EPOCH_TO_LOAD is not None else 0
     
     # Create single dataset and split into train/validation
     full_dataset = AudioDataset()
@@ -181,56 +276,60 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=2, shuffle=False, collate_fn=collate)
     scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
-    epochs = 10
+    epochs = 1
     global_step = 0
-    for epoch in range(epochs):
+    for epoch in range(starting_epoch, starting_epoch + epochs):
         denoiser.train()
+        batch_num = 0
         for waveforms, texts in loader:
             optimizer.zero_grad()
             total_loss = 0.0
             
             for waveform, transcript in zip(waveforms, texts):
-                # Split entire waveform into chunks
-                chunks = chunk_audio(waveform)
-                
-                # Process all chunks through denoiser
-                processed_mels = []
+                features = processor.feature_extractor(
+                    waveform.numpy(),
+                    sampling_rate=SAMPLE_RATE,
+                    return_tensors="pt",
+                )
+
+                mel = features.input_features.to(DEVICE)
+
+                chunks, original_length = chunk_mel(mel)
+
+                processed = []
+
                 for chunk in chunks:
-                    # Whisper feature extraction
-                    features = processor.feature_extractor(
-                        chunk.numpy(),
-                        sampling_rate=SAMPLE_RATE,
-                        return_tensors="pt",
-                    )
-                    
-                    mel = features.input_features.to(DEVICE)
-                    # Apply denoising (keeping gradients)
-                    denoised_mel = denoiser(mel)
-                    processed_mels.append(denoised_mel)
-                
-                # Concatenate processed mel spectrograms along time dimension
-                if len(processed_mels) > 1:
-                    combined_mel = torch.cat(processed_mels, dim=2)  # Concatenate along time axis
-                else:
-                    combined_mel = processed_mels[0]
-                
-                # Transcribe the entire denoised audio
-                labels = processor.tokenizer(transcript, return_tensors="pt").input_ids.to(DEVICE)
-                
+                    processed.append(denoiser(chunk))
+
+                combined_mel = torch.cat(processed, dim=-1)
+
+                # Remove padding added by chunk_mel()
+                combined_mel = combined_mel[..., :original_length]
+
+                labels = processor.tokenizer(
+                    transcript,
+                    return_tensors="pt",
+                ).input_ids.to(DEVICE)
+
                 with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-                    outputs = whisper(input_features=combined_mel, labels=labels)
+                    outputs = whisper(
+                        input_features=combined_mel,
+                        labels=labels,
+                    )
                     loss = outputs.loss
-                
+
                 total_loss += loss
                 global_step += 1
-                writer.add_scalar("Loss/train", loss, global_step)
+                batch_num += 1
+                writer.add_scalar("Loss/Train", loss, global_step)
 
             # Backpropagate the accumulated loss for the batch
             scaler.scale(total_loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
-            print(f"epoch={epoch} " f"loss={total_loss.item():.4f}")
+            print(f"\repoch={epoch + 1}/{starting_epoch + epochs} batch={batch_num}/{len(loader)} loss={total_loss.item():.4f}", end="")
+        print()
 
         # Run validation at the end of each epoch
         print(f"Running validation for epoch {epoch}...")
@@ -245,8 +344,68 @@ def main():
                 "optimizer": optimizer.state_dict(),
                 "val_loss": val_loss,
             },
-            f"checkpoint_{epoch}.pt",
+            f"checkpoint_{epoch + 1}.pt",
         )
+
+
+def denoise_to_wav(model, input_wav, output_wav, processor, device):
+    model.eval()
+
+    waveform, sr = torchaudio.load(input_wav)
+    if sr != SAMPLE_RATE:
+        waveform = torchaudio.functional.resample(waveform, sr, SAMPLE_RATE)
+
+    waveform = waveform.mean(0)
+
+    with torch.no_grad():
+        mel = processor.feature_extractor(
+            waveform.numpy(),
+            sampling_rate=SAMPLE_RATE,
+            return_tensors="pt",
+        ).input_features.to(device)
+
+        denoised = model(mel).squeeze(0).cpu()  # (80, 3000)
+
+        plt.imshow(denoised)
+        plt.show()
+
+    inverse_mel = torchaudio.transforms.InverseMelScale(
+        n_stft=201,
+        n_mels=80,
+        sample_rate=SAMPLE_RATE,
+    )
+
+    griffin = torchaudio.transforms.GriffinLim(
+        n_fft=400,
+        hop_length=160,
+    )
+
+    linear_spec = inverse_mel(denoised)
+    audio = griffin(linear_spec)
+
+    torchaudio.save(output_wav, audio.unsqueeze(0), SAMPLE_RATE)
+
+    model.train()
+
+
+def main():
+
+    base_model = "openai/whisper-tiny.en"
+    processor = WhisperProcessor.from_pretrained(base_model)
+
+    denoiser = Denoiser().to(DEVICE)
+    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
+    if EPOCH_TO_LOAD is not None:
+        saved_object = torch.load(f"checkpoint_{EPOCH_TO_LOAD}.pt")
+        denoiser.load_state_dict(saved_object["model"])
+        optimizer.load_state_dict(saved_object["optimizer"])
+
+    # Train
+    train(denoiser, optimizer)
+
+    # Save a denoised file
+    # path_to_denoise = "../backend/data/" + list(filter(lambda x: x.endswith(".wav"), os.listdir("../backend/data")))[0]
+    # denoise_to_wav(denoiser, path_to_denoise, "denoised.wav", processor, DEVICE)
 
 
 if __name__ == "__main__":
