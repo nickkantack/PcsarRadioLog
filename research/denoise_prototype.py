@@ -240,7 +240,7 @@ def validate(model, val_loader, processor, whisper, device, global_step):
     return avg_val_loss
 
 
-def train(denoiser, optimizer, processor):
+def train(denoiser, optimizer, processor, whisper):
 
     # Print model summary early
     """
@@ -249,10 +249,6 @@ def train(denoiser, optimizer, processor):
     del denoiser_temp
     print("\n")
     """
-
-    base_model = "openai/whisper-tiny.en"
-    whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
-    whisper.eval()  # Keep whisper in eval mode since we're not training it
 
     # freeze whisper weights while preserving autograd
     for p in whisper.parameters():
@@ -388,10 +384,44 @@ def denoise_to_wav(model, input_wav, output_wav, processor, device):
     model.train()
 
 
+def transcribe(model, input_wav, processor, whisper, device):
+
+    model.eval()
+
+    waveform, sr = torchaudio.load(input_wav)
+    if sr != SAMPLE_RATE:
+        waveform = torchaudio.functional.resample(waveform, sr, SAMPLE_RATE)
+
+    waveform = waveform.mean(0)
+
+    with torch.no_grad():
+        mel = processor.feature_extractor(
+            waveform.numpy(),
+            sampling_rate=SAMPLE_RATE,
+            return_tensors="pt",
+        ).input_features.to(device)
+
+        # mel = model(mel)
+
+        generated_ids = whisper.generate(
+                input_features=mel
+            )
+
+        text = processor.batch_decode(
+            generated_ids,
+            skip_special_tokens=True,
+        )[0]
+
+        print(text)
+
+
+
 def main():
 
     base_model = "openai/whisper-tiny.en"
     processor = WhisperProcessor.from_pretrained(base_model)
+    whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
+    whisper.eval()  # Keep whisper in eval mode since we're not training it
 
     denoiser = Denoiser().to(DEVICE)
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
@@ -401,11 +431,12 @@ def main():
         optimizer.load_state_dict(saved_object["optimizer"])
 
     # Train
-    train(denoiser, optimizer)
+    # train(denoiser, optimizer)
 
-    # Save a denoised file
-    # path_to_denoise = "../backend/data/" + list(filter(lambda x: x.endswith(".wav"), os.listdir("../backend/data")))[0]
-    # denoise_to_wav(denoiser, path_to_denoise, "denoised.wav", processor, DEVICE)
+    # Print a transcripting utilizing the denoiser
+    path_to_transcribe = "../backend/data/" + list(filter(lambda x: x.endswith(".wav"), os.listdir("../backend/data")))[0]
+    print(path_to_transcribe)
+    transcribe(denoiser, path_to_transcribe, processor, whisper, DEVICE)
 
 
 if __name__ == "__main__":

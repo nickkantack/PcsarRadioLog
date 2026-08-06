@@ -59,7 +59,7 @@ def transcriber_worker():
                 filename,
                 language="en",
                 initial_prompt=PROMPT,
-                beam_size=1,
+                beam_size=5,
                 vad_filter=False,
             )
 
