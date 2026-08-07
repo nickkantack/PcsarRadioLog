@@ -21,7 +21,9 @@ from transformers import (
 VALIDATION_SPLIT = 0.2  # 20% for validation, 80% for training
 writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 
-EPOCH_TO_LOAD = 9
+CHECKPOINT_PREFIX = "additive-end_"
+EPOCH_TO_LOAD = None
+EPOCHS_TO_TRAIN = 1
 
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 2
@@ -86,29 +88,48 @@ class Denoiser(nn.Module):
     def forward(self, x):
         skips = []
 
+        w = x
+
         # Encoder
         for layer in self.encoder:
-            x = self.relu(layer(x))
-            skips.append(x)
-            x = self.pool(x)
+            w = self.relu(layer(w))
+            skips.append(w)
+            w = self.pool(w)
 
         # Bottleneck
-        x = self.relu(self.bottleneck(x))
+        w = self.relu(self.bottleneck(w))
 
         # Decoder
         for layer, skip in zip(self.decoder, reversed(skips)):
-            x = self.up(x)
+            w = self.up(w)
 
             # Match temporal dimensions
-            if x.size(-1) > skip.size(-1):
-                x = x[..., :skip.size(-1)]
-            elif x.size(-1) < skip.size(-1):
-                skip = skip[..., :x.size(-1)]
+            if w.size(-1) > skip.size(-1):
+                w = w[..., :skip.size(-1)]
+            elif w.size(-1) < skip.size(-1):
+                skip = skip[..., :w.size(-1)]
 
-            x = torch.cat((x, skip), dim=1)
-            x = self.relu(layer(x))
+            w = torch.cat((w, skip), dim=1)
+            w = self.relu(layer(w))
 
-        return self.final(x)
+        """
+        By making the output additive on the input, the auto-encoder part of the 
+        U-Net has the option to decline to make large changes to the input without
+        having to do the difficult work of learning to reconstruct the input
+        from a low dimensional representation. Pretraining then should teach the
+        U-Net to NOT change the input, so that when the training task shifts to
+        transcription accuracy the U-Net explores small changes to the input
+        over large ones. In theory, the U-Net can spend all of its degrees of
+        freedom learning denoising rather than audio reconstruction.
+        """
+
+        # TODO make it configurable whether the input is added or not. Train
+        # with the input NOT added first, the U-Net gets a good internal representation,
+        # then train with the input added, wait for reconstruction loss to be
+        # significantly smaller than it was without the added input, then switch
+        # to training for transcription accuracy.
+
+        return self.final(w) + x
 
 
 class AudioDataset(Dataset):
@@ -272,14 +293,15 @@ def train(denoiser, optimizer, processor, whisper):
     val_loader = DataLoader(val_dataset, batch_size=2, shuffle=False, collate_fn=collate)
     scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
-    epochs = 1
     global_step = 0
-    for epoch in range(starting_epoch, starting_epoch + epochs):
+    for epoch in range(starting_epoch, starting_epoch + EPOCHS_TO_TRAIN):
         denoiser.train()
         batch_num = 0
         for waveforms, texts in loader:
             optimizer.zero_grad()
             total_loss = 0.0
+            total_whisper_loss = 0.0
+            total_mse_loss = 0.0
             
             for waveform, transcript in zip(waveforms, texts):
                 features = processor.feature_extractor(
@@ -290,18 +312,33 @@ def train(denoiser, optimizer, processor, whisper):
 
                 mel = features.input_features.to(DEVICE)
 
+                # Compute the mask of where audio actually is within the
+                # 30 second mel.
+                is_audio_mask = torch.where(
+                    mel > torch.min(mel), 
+                    torch.ones_like(mel), 
+                    torch.zeros_like(mel)
+                )
+                is_audio_mask.to(DEVICE)
+
                 chunks, original_length = chunk_mel(mel)
 
                 processed = []
 
                 for chunk in chunks:
-                    processed.append(denoiser(chunk))
+                    # Compute denoised output
+                    denoised_chunk = denoiser(chunk)
+                    processed.append(denoised_chunk)
+                    
 
                 combined_mel = torch.cat(processed, dim=-1)
 
                 # Remove padding added by chunk_mel()
                 combined_mel = combined_mel[..., :original_length]
 
+                mse_loss = torch.nn.functional.mse_loss(combined_mel * is_audio_mask, mel * is_audio_mask)
+
+                """
                 labels = processor.tokenizer(
                     transcript,
                     return_tensors="pt",
@@ -312,19 +349,23 @@ def train(denoiser, optimizer, processor, whisper):
                         input_features=combined_mel,
                         labels=labels,
                     )
-                    loss = outputs.loss
+                    whisper_loss = outputs.loss
+                """
 
-                total_loss += loss
+                # Choose loss function
+                # loss = whisper_loss
+                loss = mse_loss
+
                 global_step += 1
                 batch_num += 1
                 writer.add_scalar("Loss/Train", loss, global_step)
 
             # Backpropagate the accumulated loss for the batch
-            scaler.scale(total_loss).backward()
+            scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
-            print(f"\repoch={epoch + 1}/{starting_epoch + epochs} batch={batch_num}/{len(loader)} loss={total_loss.item():.4f}", end="")
+            print(f"\repoch={epoch + 1}/{starting_epoch + EPOCHS_TO_TRAIN} batch={batch_num}/{len(loader)} loss={loss.item():.3f}", end="")
         print()
 
         # Run validation at the end of each epoch
@@ -340,7 +381,7 @@ def train(denoiser, optimizer, processor, whisper):
                 "optimizer": optimizer.state_dict(),
                 "val_loss": val_loss,
             },
-            f"checkpoint_{epoch + 1}.pt",
+            f"{CHECKPOINT_PREFIX}{epoch + 1}.pt",
         )
 
 
@@ -401,7 +442,11 @@ def transcribe(model, input_wav, processor, whisper, device):
             return_tensors="pt",
         ).input_features.to(device)
 
-        # mel = model(mel)
+        fig, axes = plt.subplots(2)
+        axes[0].imshow(mel.clone().detach().cpu().squeeze())
+        mel = model(mel)
+        axes[1].imshow(mel.clone().detach().cpu().squeeze())
+        plt.show()
 
         generated_ids = whisper.generate(
                 input_features=mel
@@ -426,12 +471,12 @@ def main():
     denoiser = Denoiser().to(DEVICE)
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
     if EPOCH_TO_LOAD is not None:
-        saved_object = torch.load(f"checkpoint_{EPOCH_TO_LOAD}.pt")
+        saved_object = torch.load(f"{CHECKPOINT_PREFIX}{EPOCH_TO_LOAD}.pt")
         denoiser.load_state_dict(saved_object["model"])
         optimizer.load_state_dict(saved_object["optimizer"])
 
     # Train
-    # train(denoiser, optimizer)
+    train(denoiser, optimizer, processor, whisper)
 
     # Print a transcripting utilizing the denoiser
     path_to_transcribe = "../backend/data/" + list(filter(lambda x: x.endswith(".wav"), os.listdir("../backend/data")))[0]
