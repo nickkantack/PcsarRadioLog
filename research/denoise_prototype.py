@@ -49,6 +49,8 @@ class Denoiser(nn.Module):
             padding=1,
         )
 
+        self.add_input = True
+
         # Decoder
         #
         # Encoder outputs (skip connections):
@@ -129,7 +131,24 @@ class Denoiser(nn.Module):
         # significantly smaller than it was without the added input, then switch
         # to training for transcription accuracy.
 
-        return self.final(w) + x
+        if self.add_input:
+            return self.final(w) + x
+        else:
+            """
+            Idea: When training with self.add_input = True, compute loss by comparing
+            the Denoiser's output to the original audio WITH IT'S MEAN SUBTRACTED.
+            The idea is that the Denoiser still has to reproduce the relative shape
+            of the audio, so it learns useful representations, but it also biases
+            towards a zero mean change on the audio, which means that when 
+            self.add_input flips to True, the Denoiser output suddenly exaggerates
+            the scale of x but doesn't shift the values, so training immediately
+            starts with weights moving relative to one another rather than all
+            weights racing down towards zero (they still race towards zero initially
+            under this idea, but something feels better about having the Denoiser
+            output pixels on both sides of the correct answer rather than all too
+            large. Maybe this doesn't change much.
+            """
+            return self.final(w)
 
 
 class AudioDataset(Dataset):

@@ -127,7 +127,14 @@ async def receive_event(event_data: dict):
 @app.get("/label/files")
 def label_files():
     ids = sorted(p.stem for p in Path("data").glob("*.wav"))
-    return ids
+    ids_to_vend = []
+    for id in ids:
+        if Path(f"data/{id}.txt").exists():
+            with open(f"data/{id}.txt", "r") as file:
+                ob = json.loads(file.read())
+                if "label" not in ob:
+                    ids_to_vend.append(id)
+    return ids_to_vend
 
 
 @app.get("/label/item/{item_id}")
