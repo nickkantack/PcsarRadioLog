@@ -22,8 +22,9 @@ VALIDATION_SPLIT = 0.2  # 20% for validation, 80% for training
 writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 
 CHECKPOINT_PREFIX = "additive-end_"
-EPOCH_TO_LOAD = None
-EPOCHS_TO_TRAIN = 1
+PHASE_PREFIXES = ["_phase-0_", "_phase-1_", "_phase-2_"]
+PHASE_TO_LOAD = None
+EPOCHS_PER_PHASE = [6, 3, 3]
 
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 2
@@ -165,7 +166,10 @@ class AudioDataset(Dataset):
 
             for candidate in candidates:
                 if f"{candidate}.wav" in candidates_with_extensions and f"{candidate}.txt" in candidates_with_extensions:
-                    self.filenames_sans_extensions.append(candidate)
+                    with open(f"../backend/data/{candidate}.txt", "r") as file:
+                        properties = json.loads(file.read())
+                        if "label" in properties:
+                            self.filenames_sans_extensions.append(candidate)
         
 
     def __len__(self):
@@ -280,7 +284,7 @@ def validate(model, val_loader, processor, whisper, device, global_step):
     return avg_val_loss
 
 
-def train(denoiser, optimizer, processor, whisper):
+def train(denoiser, processor, whisper):
 
     # Print model summary early
     """
@@ -294,8 +298,6 @@ def train(denoiser, optimizer, processor, whisper):
     for p in whisper.parameters():
         p.requires_grad = False
 
-    starting_epoch = EPOCH_TO_LOAD if EPOCH_TO_LOAD is not None else 0
-    
     # Create single dataset and split into train/validation
     full_dataset = AudioDataset()
     total_samples = len(full_dataset)
@@ -313,94 +315,99 @@ def train(denoiser, optimizer, processor, whisper):
     scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
     global_step = 0
-    for epoch in range(starting_epoch, starting_epoch + EPOCHS_TO_TRAIN):
-        denoiser.train()
-        batch_num = 0
-        for waveforms, texts in loader:
-            optimizer.zero_grad()
-            total_loss = 0.0
-            total_whisper_loss = 0.0
-            total_mse_loss = 0.0
-            
-            for waveform, transcript in zip(waveforms, texts):
-                features = processor.feature_extractor(
-                    waveform.numpy(),
-                    sampling_rate=SAMPLE_RATE,
-                    return_tensors="pt",
-                )
-
-                mel = features.input_features.to(DEVICE)
-
-                # Compute the mask of where audio actually is within the
-                # 30 second mel.
-                is_audio_mask = torch.where(
-                    mel > torch.min(mel), 
-                    torch.ones_like(mel), 
-                    torch.zeros_like(mel)
-                )
-                is_audio_mask.to(DEVICE)
-
-                chunks, original_length = chunk_mel(mel)
-
-                processed = []
-
-                for chunk in chunks:
-                    # Compute denoised output
-                    denoised_chunk = denoiser(chunk)
-                    processed.append(denoised_chunk)
-                    
-
-                combined_mel = torch.cat(processed, dim=-1)
-
-                # Remove padding added by chunk_mel()
-                combined_mel = combined_mel[..., :original_length]
-
-                mse_loss = torch.nn.functional.mse_loss(combined_mel * is_audio_mask, mel * is_audio_mask)
-
-                """
-                labels = processor.tokenizer(
-                    transcript,
-                    return_tensors="pt",
-                ).input_ids.to(DEVICE)
-
-                with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-                    outputs = whisper(
-                        input_features=combined_mel,
-                        labels=labels,
+    for phase in range(3):
+        print(f"================ PHASE {phase} ===============")
+        denoiser.add_input = phase > 0
+        optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
+        for epoch in range(EPOCHS_PER_PHASE[phase]):
+            denoiser.train()
+            batch_num = 0
+            for waveforms, texts in loader:
+                optimizer.zero_grad()
+                whisper_loss = 0.0
+                
+                for waveform, transcript in zip(waveforms, texts):
+                    features = processor.feature_extractor(
+                        waveform.numpy(),
+                        sampling_rate=SAMPLE_RATE,
+                        return_tensors="pt",
                     )
-                    whisper_loss = outputs.loss
-                """
 
-                # Choose loss function
-                # loss = whisper_loss
-                loss = mse_loss
+                    mel = features.input_features.to(DEVICE)
 
-                global_step += 1
+                    # Compute the mask of where audio actually is within the
+                    # 30 second mel.
+                    is_audio_mask = torch.where(
+                        mel > torch.min(mel), 
+                        torch.ones_like(mel), 
+                        torch.zeros_like(mel)
+                    )
+                    is_audio_mask.to(DEVICE)
+
+                    chunks, original_length = chunk_mel(mel)
+
+                    processed = []
+
+                    for chunk in chunks:
+                        # Compute denoised output
+                        denoised_chunk = denoiser(chunk)
+                        processed.append(denoised_chunk)
+                        
+
+                    combined_mel = torch.cat(processed, dim=-1)
+
+                    # Remove padding added by chunk_mel()
+                    combined_mel = combined_mel[..., :original_length]
+
+                    mse_loss = 0.0
+                    if phase != 2:
+                        mse_loss = torch.nn.functional.mse_loss(combined_mel * is_audio_mask, mel * is_audio_mask)
+
+                    if phase == 2:
+                        labels = processor.tokenizer(
+                            transcript,
+                            return_tensors="pt",
+                        ).input_ids.to(DEVICE)
+
+                        with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                            outputs = whisper(
+                                input_features=combined_mel,
+                                labels=labels,
+                            )
+                            whisper_loss = outputs.loss
+
+                    # Choose loss function
+                    loss = mse_loss + whisper_loss
+
+                    global_step += 1
+                    writer.add_scalar("Loss/Train", loss, global_step)
+
                 batch_num += 1
-                writer.add_scalar("Loss/Train", loss, global_step)
 
-            # Backpropagate the accumulated loss for the batch
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                # Backpropagate the accumulated loss for the batch
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
-            print(f"\repoch={epoch + 1}/{starting_epoch + EPOCHS_TO_TRAIN} batch={batch_num}/{len(loader)} loss={loss.item():.3f}", end="")
-        print()
+                print(f"\repoch={epoch + 1}/{EPOCHS_PER_PHASE[phase]} batch={batch_num}/{len(loader)} loss={loss.item():.3f}", end="")
+            print()
 
-        # Run validation at the end of each epoch
-        print(f"Running validation for epoch {epoch}...")
-        val_loss = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step)
-        writer.add_scalar("Loss/validation", val_loss, epoch)
-        print(f"Validation loss: {val_loss:.4f}")
+            # Run validation at the end of each epoch
+            print(f"Running validation for epoch {epoch}...")
+            val_loss = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step)
+            writer.add_scalar("Loss/validation", val_loss, epoch)
+            print(f"Validation loss: {val_loss:.4f}")
 
         torch.save(
             {
-                "epoch": epoch,
+                "phase": phase,
                 "model": denoiser.state_dict(),
+                # TODO don't save and load the optimizer if we continue to reset it at the start of each
+                # phase and continue to only save models at the end of phases
                 "optimizer": optimizer.state_dict(),
                 "val_loss": val_loss,
             },
-            f"{CHECKPOINT_PREFIX}{epoch + 1}.pt",
+            f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[phase]}.pt",
         )
 
 
@@ -488,14 +495,12 @@ def main():
     whisper.eval()  # Keep whisper in eval mode since we're not training it
 
     denoiser = Denoiser().to(DEVICE)
-    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
-    if EPOCH_TO_LOAD is not None:
-        saved_object = torch.load(f"{CHECKPOINT_PREFIX}{EPOCH_TO_LOAD}.pt")
+    if PHASE_TO_LOAD is not None:
+        saved_object = torch.load(f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[PHASE_TO_LOAD]}.pt")
         denoiser.load_state_dict(saved_object["model"])
-        optimizer.load_state_dict(saved_object["optimizer"])
 
     # Train
-    train(denoiser, optimizer, processor, whisper)
+    train(denoiser, processor, whisper)
 
     # Print a transcripting utilizing the denoiser
     path_to_transcribe = "../backend/data/" + list(filter(lambda x: x.endswith(".wav"), os.listdir("../backend/data")))[0]
