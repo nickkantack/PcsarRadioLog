@@ -16,4 +16,4 @@ backend/*.js
 backend/*.css
 backend/*.ico
 
-checkpoint*.pt
+*.pt

@@ -19,12 +19,14 @@ from transformers import (
 
 # Configuration
 VALIDATION_SPLIT = 0.2  # 20% for validation, 80% for training
+BATCH_SIZE = 4
 writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 
 CHECKPOINT_PREFIX = "additive-end_"
 PHASE_PREFIXES = ["_phase-0_", "_phase-1_", "_phase-2_"]
 PHASE_TO_LOAD = None
-EPOCHS_PER_PHASE = [6, 3, 3]
+EPOCHS_PER_PHASE = [0, 0, 100]
+LEARNING_RATES_PER_PHASE = [1e-4, 1e-4, 3e-3]
 
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 2
@@ -235,10 +237,11 @@ def chunk_mel(mel, chunk_size=MEL_CHUNK):
     return chunks, T
 
 
-def validate(model, val_loader, processor, whisper, device, global_step):
+def validate(model, val_loader, processor, whisper, device, global_step, full_dataset):
     """Run validation and return average validation loss"""
     model.eval()
     total_val_loss = 0.0
+    average_wer = 0
     num_batches = 0
     
     with torch.no_grad():
@@ -277,11 +280,37 @@ def validate(model, val_loader, processor, whisper, device, global_step):
                     loss = outputs.loss
 
                 total_val_loss += loss.item()
+
+                generated_ids = whisper.generate(
+                        input_features=combined_mel
+                    )
+
+                predicted_text = processor.batch_decode(
+                    generated_ids,
+                    skip_special_tokens=True,
+                )[0]
+
+                average_wer += wer(transcript, predicted_text)
                 num_batches += 1
     
-    avg_val_loss = total_val_loss / num_batches if num_batches > 0 else 0
+    total_val_loss /= num_batches
+    average_wer /= num_batches
     model.train()
-    return avg_val_loss
+
+    # Generate an example prediction/ground truth pair to write in tensorboard
+    filename_no_extension = full_dataset.filenames_sans_extensions[1]
+    with open(f"../backend/data/{filename_no_extension}.txt", "r") as file:
+        properties = json.loads(file.read())
+        prediction = transcribe(model, f"../backend/data/{filename_no_extension}.wav", processor, whisper, device)
+        reference = properties["label"]
+        writer.add_text(
+            "Examples/Transcript",
+            f"**Reference:** {reference}\n\n"
+            f"**Prediction:** {prediction}",
+            global_step,
+        )
+
+    return total_val_loss, average_wer
 
 
 def train(denoiser, processor, whisper):
@@ -310,21 +339,23 @@ def train(denoiser, processor, whisper):
         generator=torch.Generator().manual_seed(42)  # For reproducibility
     )
     
-    loader = DataLoader(train_dataset, batch_size=2, shuffle=True, collate_fn=collate)
-    val_loader = DataLoader(val_dataset, batch_size=2, shuffle=False, collate_fn=collate)
+    loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
     scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
     global_step = 0
-    for phase in range(3):
+    for phase in range(PHASE_TO_LOAD + 1 if PHASE_TO_LOAD is not None else 0, 3):
         print(f"================ PHASE {phase} ===============")
         denoiser.add_input = phase > 0
-        optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
+        optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LEARNING_RATES_PER_PHASE[phase])
         for epoch in range(EPOCHS_PER_PHASE[phase]):
             denoiser.train()
             batch_num = 0
             for waveforms, texts in loader:
                 optimizer.zero_grad()
                 whisper_loss = 0.0
+
+                batch_loss = 0.0
                 
                 for waveform, transcript in zip(waveforms, texts):
                     features = processor.feature_extractor(
@@ -379,13 +410,15 @@ def train(denoiser, processor, whisper):
                     # Choose loss function
                     loss = mse_loss + whisper_loss
 
+                    batch_loss += loss
+
                     global_step += 1
                     writer.add_scalar("Loss/Train", loss, global_step)
 
                 batch_num += 1
 
-                # Backpropagate the accumulated loss for the batch
-                scaler.scale(loss).backward()
+                batch_loss = batch_loss / len(waveforms)
+                scaler.scale(batch_loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
 
@@ -394,8 +427,9 @@ def train(denoiser, processor, whisper):
 
             # Run validation at the end of each epoch
             print(f"Running validation for epoch {epoch}...")
-            val_loss = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step)
+            val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step, full_dataset)
             writer.add_scalar("Loss/validation", val_loss, epoch)
+            writer.add_scalar("WER/validation", average_wer, epoch)
             print(f"Validation loss: {val_loss:.4f}")
 
         torch.save(
@@ -405,7 +439,6 @@ def train(denoiser, processor, whisper):
                 # TODO don't save and load the optimizer if we continue to reset it at the start of each
                 # phase and continue to only save models at the end of phases
                 "optimizer": optimizer.state_dict(),
-                "val_loss": val_loss,
             },
             f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[phase]}.pt",
         )
@@ -485,6 +518,8 @@ def transcribe(model, input_wav, processor, whisper, device):
 
         print(text)
 
+        return text
+
 
 
 def main():
@@ -506,6 +541,28 @@ def main():
     path_to_transcribe = "../backend/data/" + list(filter(lambda x: x.endswith(".wav"), os.listdir("../backend/data")))[0]
     print(path_to_transcribe)
     transcribe(denoiser, path_to_transcribe, processor, whisper, DEVICE)
+
+
+def wer(reference: str, hypothesis: str) -> float:
+    r, h = reference.split(), hypothesis.split()
+
+    # dp[j] = distance between the first i reference words and first j hypothesis words
+    dp = list(range(len(h) + 1))
+
+    for i, rw in enumerate(r, 1):
+        prev = dp[0]
+        dp[0] = i
+
+        for j, hw in enumerate(h, 1):
+            old = dp[j]
+            dp[j] = min(
+                dp[j] + 1,                   # deletion
+                dp[j - 1] + 1,               # insertion
+                prev + (rw != hw)           # substitution
+            )
+            prev = old
+
+    return dp[-1] / len(r) if r else float("inf")
 
 
 if __name__ == "__main__":
