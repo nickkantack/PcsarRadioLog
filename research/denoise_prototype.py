@@ -170,7 +170,7 @@ class AudioDataset(Dataset):
                 if f"{candidate}.wav" in candidates_with_extensions and f"{candidate}.txt" in candidates_with_extensions:
                     with open(f"../backend/data/{candidate}.txt", "r") as file:
                         properties = json.loads(file.read())
-                        if "label" in properties:
+                        if "label" in properties and properties["label"] != "X":
                             self.filenames_sans_extensions.append(candidate)
         
 
@@ -282,7 +282,10 @@ def validate(model, val_loader, processor, whisper, device, global_step, full_da
                 total_val_loss += loss.item()
 
                 generated_ids = whisper.generate(
-                        input_features=combined_mel
+                        input_features=combined_mel,
+                        num_beams=5,
+                        do_sample=False,
+                        early_stopping=True
                     )
 
                 predicted_text = processor.batch_decode(
@@ -512,7 +515,10 @@ def transcribe(model, input_wav, processor, whisper, device):
         """
 
         generated_ids = whisper.generate(
-                input_features=mel
+                input_features=mel,
+                num_beams=5,
+                do_sample=False,
+                early_stopping=True
             )
 
         text = processor.batch_decode(
@@ -531,6 +537,7 @@ def transcribe(model, input_wav, processor, whisper, device):
 def main():
 
     base_model = "openai/whisper-tiny.en"
+    # base_model = "openai/whisper-small.en"
     processor = WhisperProcessor.from_pretrained(base_model)
     whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
     whisper.eval()  # Keep whisper in eval mode since we're not training it
