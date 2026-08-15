@@ -25,8 +25,8 @@ writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 CHECKPOINT_PREFIX = "additive-end_"
 PHASE_PREFIXES = ["_phase-0_", "_phase-1_", "_phase-2_"]
 PHASE_TO_LOAD = None
-EPOCHS_PER_PHASE = [0, 0, 100]
-LEARNING_RATES_PER_PHASE = [1e-4, 1e-4, 3e-3]
+EPOCHS_PER_PHASE = [0, 0, 200]
+LEARNING_RATES_PER_PHASE = [1e-4, 1e-4, 1e-4]
 
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 2
@@ -345,6 +345,7 @@ def train(denoiser, processor, whisper):
 
     global_step = 0
     for phase in range(PHASE_TO_LOAD + 1 if PHASE_TO_LOAD is not None else 0, 3):
+        denoiser.train()
         print(f"================ PHASE {phase} ===============")
         denoiser.add_input = phase > 0
         optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LEARNING_RATES_PER_PHASE[phase])
@@ -390,9 +391,7 @@ def train(denoiser, processor, whisper):
                     # Remove padding added by chunk_mel()
                     combined_mel = combined_mel[..., :original_length]
 
-                    mse_loss = 0.0
-                    if phase != 2:
-                        mse_loss = torch.nn.functional.mse_loss(combined_mel * is_audio_mask, mel * is_audio_mask)
+                    mse_loss = torch.nn.functional.mse_loss(combined_mel * is_audio_mask, mel * is_audio_mask)
 
                     if phase == 2:
                         labels = processor.tokenizer(
@@ -408,7 +407,7 @@ def train(denoiser, processor, whisper):
                             whisper_loss = outputs.loss
 
                     # Choose loss function
-                    loss = mse_loss + whisper_loss
+                    loss = 10 * mse_loss + whisper_loss
 
                     batch_loss += loss
 
@@ -501,11 +500,16 @@ def transcribe(model, input_wav, processor, whisper, device):
             return_tensors="pt",
         ).input_features.to(device)
 
+
+        """
         fig, axes = plt.subplots(2)
         axes[0].imshow(mel.clone().detach().cpu().squeeze())
+        """
         mel = model(mel)
+        """
         axes[1].imshow(mel.clone().detach().cpu().squeeze())
         plt.show()
+        """
 
         generated_ids = whisper.generate(
                 input_features=mel
@@ -517,6 +521,8 @@ def transcribe(model, input_wav, processor, whisper, device):
         )[0]
 
         print(text)
+    
+        model.train()
 
         return text
 
