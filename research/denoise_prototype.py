@@ -181,7 +181,7 @@ class AudioDataset(Dataset):
         audio, sr = torchaudio.load(f"../backend/data/{self.filenames_sans_extensions[idx]}.wav")
         text = ""
         with open(f"../backend/data/{self.filenames_sans_extensions[idx]}.txt", "r") as file:
-            text = json.loads(file.read())["text"]
+            text = json.loads(file.read())["label"]
         if sr != SAMPLE_RATE:
             audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
         audio = audio.mean(0)
@@ -239,10 +239,13 @@ def chunk_mel(mel, chunk_size=MEL_CHUNK):
 
 def validate(model, val_loader, processor, whisper, device, global_step, full_dataset):
     """Run validation and return average validation loss"""
-    model.eval()
+    if model:
+        model.eval()
     total_val_loss = 0.0
     average_wer = 0
     num_batches = 0
+
+    whisper.eval()
     
     with torch.no_grad():
         for waveforms, texts in val_loader:
@@ -255,17 +258,21 @@ def validate(model, val_loader, processor, whisper, device, global_step, full_da
 
                 mel = features.input_features.to(DEVICE)
 
-                chunks, original_length = chunk_mel(mel)
+                if model is None:
+                    combined_mel = mel
+                else:
 
-                processed = []
+                    chunks, original_length = chunk_mel(mel)
 
-                for chunk in chunks:
-                    processed.append(model(chunk))
+                    processed = []
 
-                combined_mel = torch.cat(processed, dim=-1)
+                    for chunk in chunks:
+                        processed.append(model(chunk))
 
-                # Remove padding added by chunk_mel()
-                combined_mel = combined_mel[..., :original_length]
+                    combined_mel = torch.cat(processed, dim=-1)
+
+                    # Remove padding added by chunk_mel()
+                    combined_mel = combined_mel[..., :original_length]
 
                 labels = processor.tokenizer(
                     transcript,
@@ -298,10 +305,11 @@ def validate(model, val_loader, processor, whisper, device, global_step, full_da
     
     total_val_loss /= num_batches
     average_wer /= num_batches
-    model.train()
+    if model:
+        model.train()
 
     # Generate an example prediction/ground truth pair to write in tensorboard
-    filename_no_extension = full_dataset.filenames_sans_extensions[1]
+    filename_no_extension = "segment_1784136495949162_0051bfa0-ed51-440d-9eae-b658645d6f15"
     with open(f"../backend/data/{filename_no_extension}.txt", "r") as file:
         properties = json.loads(file.read())
         prediction = transcribe(model, f"../backend/data/{filename_no_extension}.wav", processor, whisper, device)
@@ -378,7 +386,7 @@ def train(denoiser, processor, whisper):
                         torch.zeros_like(mel)
                     )
                     is_audio_mask.to(DEVICE)
-
+                    
                     chunks, original_length = chunk_mel(mel)
 
                     processed = []
@@ -446,6 +454,90 @@ def train(denoiser, processor, whisper):
         )
 
 
+def fine_tune_whisper(whisper, processor, device):
+
+    # Create single dataset and split into train/validation
+    full_dataset = AudioDataset()
+    total_samples = len(full_dataset)
+    validation_count = int(total_samples * VALIDATION_SPLIT)
+    train_count = total_samples - validation_count
+    
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        full_dataset, 
+        [train_count, validation_count],
+        generator=torch.Generator().manual_seed(42)  # For reproducibility
+    )
+    
+    loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
+    scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
+
+    global_step = 0
+
+    optimizer = torch.optim.AdamW(whisper.parameters(), lr=5e-6, weight_decay=0.01)
+
+    num_epochs = 100
+
+    for epoch in range(num_epochs):
+
+        whisper.train()
+
+        batch_num = 0
+        for waveforms, texts in loader:
+
+            optimizer.zero_grad(set_to_none=True)
+
+            batch_loss = 0.0
+            for waveform, transcript in zip(waveforms, texts):
+
+                input_features = processor(
+                    waveform.numpy(),
+                    sampling_rate=16000,
+                    return_tensors="pt",
+                ).input_features
+
+                labels = processor.tokenizer(
+                    transcript,
+                    return_tensors="pt",
+                ).input_ids
+
+                labels[labels == processor.tokenizer.pad_token_id] = -100
+
+                input_features = input_features.to(device)
+                labels = labels.to(device)
+
+                with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                    outputs = whisper(
+                        input_features=input_features,
+                        labels=labels,
+                    )
+
+                    batch_loss += outputs.loss
+
+            batch_loss = batch_loss / len(waveforms)
+            scaler.scale(batch_loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            batch_num += 1
+            global_step += 1
+            writer.add_scalar("Loss/Train", batch_loss, global_step)
+
+            print(f"\repoch={epoch + 1}/{num_epochs} batch={batch_num}/{len(loader)}", end="")
+        print()
+
+        # Run validation at the end of each epoch
+        print(f"Running validation for epoch {epoch}...")
+        val_loss, average_wer = validate(None, val_loader, processor, whisper, DEVICE, global_step, full_dataset)
+        writer.add_scalar("Loss/validation", val_loss, epoch)
+        writer.add_scalar("WER/validation", average_wer, epoch)
+        print(f"Validation loss: {val_loss:.4f}")
+
+        # Save fine-tuned model
+        whisper.save_pretrained("./whisper-domain")
+        processor.save_pretrained("./whisper-domain")
+
+
 def denoise_to_wav(model, input_wav, output_wav, processor, device):
     model.eval()
 
@@ -486,9 +578,12 @@ def denoise_to_wav(model, input_wav, output_wav, processor, device):
     model.train()
 
 
-def transcribe(model, input_wav, processor, whisper, device):
+def transcribe(denoiser, input_wav, processor, whisper, device):
 
-    model.eval()
+    if denoiser:
+        denoiser.eval()
+
+    whisper.eval()
 
     waveform, sr = torchaudio.load(input_wav)
     if sr != SAMPLE_RATE:
@@ -508,7 +603,8 @@ def transcribe(model, input_wav, processor, whisper, device):
         fig, axes = plt.subplots(2)
         axes[0].imshow(mel.clone().detach().cpu().squeeze())
         """
-        mel = model(mel)
+        if denoiser:
+            mel = denoiser(mel)
         """
         axes[1].imshow(mel.clone().detach().cpu().squeeze())
         plt.show()
@@ -528,7 +624,8 @@ def transcribe(model, input_wav, processor, whisper, device):
 
         print(text)
     
-        model.train()
+        if denoiser:
+            denoiser.train()
 
         return text
 
@@ -536,11 +633,18 @@ def transcribe(model, input_wav, processor, whisper, device):
 
 def main():
 
-    base_model = "openai/whisper-tiny.en"
+    base_model = "./whisper-domain"
+    # base_model = "openai/whisper-tiny.en"
     # base_model = "openai/whisper-small.en"
-    processor = WhisperProcessor.from_pretrained(base_model)
+    processor = WhisperProcessor.from_pretrained(
+        base_model,
+        language="english",
+        task="transcribe"
+    )
     whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
     whisper.eval()  # Keep whisper in eval mode since we're not training it
+
+    ten_four_name = "segment_1784136495949162_0051bfa0-ed51-440d-9eae-b658645d6f15"
 
     denoiser = Denoiser().to(DEVICE)
     if PHASE_TO_LOAD is not None:
@@ -548,12 +652,12 @@ def main():
         denoiser.load_state_dict(saved_object["model"])
 
     # Train
-    train(denoiser, processor, whisper)
+    # train(denoiser, processor, whisper)
+    # fine_tune_whisper(whisper, processor, DEVICE)
 
     # Print a transcripting utilizing the denoiser
-    path_to_transcribe = "../backend/data/" + list(filter(lambda x: x.endswith(".wav"), os.listdir("../backend/data")))[0]
-    print(path_to_transcribe)
-    transcribe(denoiser, path_to_transcribe, processor, whisper, DEVICE)
+    path_to_transcribe = f"../backend/data/{ten_four_name}.wav"
+    transcribe(None, path_to_transcribe, processor, whisper, DEVICE)
 
 
 def wer(reference: str, hypothesis: str) -> float:

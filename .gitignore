@@ -17,3 +17,5 @@ backend/*.css
 backend/*.ico
 
 *.pt
+
+research/whisper-domain/
