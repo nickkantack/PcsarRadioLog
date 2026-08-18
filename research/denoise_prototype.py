@@ -17,6 +17,10 @@ from transformers import (
     WhisperForConditionalGeneration,
 )
 
+
+TEN_FOUR_NAME = "segment_1784136495949162_0051bfa0-ed51-440d-9eae-b658645d6f15"
+LONG_REPORT_NAME = "segment_1784144726501455_270cd5ca-e1e4-407a-b683-03c76d60a39d"
+
 # Configuration
 VALIDATION_SPLIT = 0.2  # 20% for validation, 80% for training
 BATCH_SIZE = 4
@@ -37,6 +41,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 class Denoiser(nn.Module):
     def __init__(self, channels=(80, 64, 32, 16)):
         super().__init__()
+
+        self.dropout = nn.Dropout1d(p=0.1)
 
         # Encoder
         self.encoder = nn.ModuleList([
@@ -98,11 +104,13 @@ class Denoiser(nn.Module):
         # Encoder
         for layer in self.encoder:
             w = self.relu(layer(w))
+            w = self.dropout(w)
             skips.append(w)
             w = self.pool(w)
 
         # Bottleneck
         w = self.relu(self.bottleneck(w))
+        w = self.dropout(w)
 
         # Decoder
         for layer, skip in zip(self.decoder, reversed(skips)):
@@ -309,7 +317,7 @@ def validate(model, val_loader, processor, whisper, device, global_step, full_da
         model.train()
 
     # Generate an example prediction/ground truth pair to write in tensorboard
-    filename_no_extension = "segment_1784136495949162_0051bfa0-ed51-440d-9eae-b658645d6f15"
+    filename_no_extension = LONG_REPORT_NAME
     with open(f"../backend/data/{filename_no_extension}.txt", "r") as file:
         properties = json.loads(file.read())
         prediction = transcribe(model, f"../backend/data/{filename_no_extension}.wav", processor, whisper, device)
@@ -474,7 +482,7 @@ def fine_tune_whisper(whisper, processor, device):
 
     global_step = 0
 
-    optimizer = torch.optim.AdamW(whisper.parameters(), lr=5e-6, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(whisper.parameters(), lr=1e-6, weight_decay=0.01)
 
     num_epochs = 100
 
@@ -633,9 +641,9 @@ def transcribe(denoiser, input_wav, processor, whisper, device):
 
 def main():
 
-    base_model = "./whisper-domain"
+    # base_model = "./whisper-domain"
     # base_model = "openai/whisper-tiny.en"
-    # base_model = "openai/whisper-small.en"
+    base_model = "openai/whisper-small.en"
     processor = WhisperProcessor.from_pretrained(
         base_model,
         language="english",
@@ -644,19 +652,17 @@ def main():
     whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
     whisper.eval()  # Keep whisper in eval mode since we're not training it
 
-    ten_four_name = "segment_1784136495949162_0051bfa0-ed51-440d-9eae-b658645d6f15"
-
     denoiser = Denoiser().to(DEVICE)
     if PHASE_TO_LOAD is not None:
         saved_object = torch.load(f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[PHASE_TO_LOAD]}.pt")
         denoiser.load_state_dict(saved_object["model"])
 
     # Train
-    # train(denoiser, processor, whisper)
+    train(denoiser, processor, whisper)
     # fine_tune_whisper(whisper, processor, DEVICE)
 
     # Print a transcripting utilizing the denoiser
-    path_to_transcribe = f"../backend/data/{ten_four_name}.wav"
+    path_to_transcribe = f"../backend/data/{LONG_REPORT_NAME}.wav"
     transcribe(None, path_to_transcribe, processor, whisper, DEVICE)
 
 
