@@ -29,7 +29,7 @@ writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 CHECKPOINT_PREFIX = "additive-end_"
 PHASE_PREFIXES = ["_phase-0_", "_phase-1_", "_phase-2_"]
 PHASE_TO_LOAD = None
-EPOCHS_PER_PHASE = [0, 0, 200]
+EPOCHS_PER_PHASE = [0, 0, 400]
 LEARNING_RATES_PER_PHASE = [1e-4, 1e-4, 1e-4]
 
 SAMPLE_RATE = 16000
@@ -95,6 +95,7 @@ class Denoiser(nn.Module):
         self.pool = nn.MaxPool1d(2)
         self.up = nn.Upsample(scale_factor=2, mode="nearest")
         self.relu = nn.ReLU(inplace=True)
+        self.tanh = nn.Tanh()
 
     def forward(self, x):
         skips = []
@@ -143,7 +144,7 @@ class Denoiser(nn.Module):
         # to training for transcription accuracy.
 
         if self.add_input:
-            return self.final(w) + x
+            return self.tanh(self.final(w)) + x
         else:
             """
             Idea: When training with self.add_input = True, compute loss by comparing
@@ -159,7 +160,7 @@ class Denoiser(nn.Module):
             output pixels on both sides of the correct answer rather than all too
             large. Maybe this doesn't change much.
             """
-            return self.final(w)
+            return self.tanh(self.final(w))
 
 
 class AudioDataset(Dataset):
@@ -313,8 +314,6 @@ def validate(model, val_loader, processor, whisper, device, global_step, full_da
     
     total_val_loss /= num_batches
     average_wer /= num_batches
-    if model:
-        model.train()
 
     # Generate an example prediction/ground truth pair to write in tensorboard
     filename_no_extension = LONG_REPORT_NAME
@@ -328,6 +327,9 @@ def validate(model, val_loader, processor, whisper, device, global_step, full_da
             f"**Prediction:** {prediction}",
             global_step,
         )
+
+    if model:
+        model.train()
 
     return total_val_loss, average_wer
 
@@ -426,7 +428,7 @@ def train(denoiser, processor, whisper):
                             whisper_loss = outputs.loss
 
                     # Choose loss function
-                    loss = 10 * mse_loss + whisper_loss
+                    loss = 0 * mse_loss + whisper_loss
 
                     batch_loss += loss
 
@@ -606,7 +608,6 @@ def transcribe(denoiser, input_wav, processor, whisper, device):
             return_tensors="pt",
         ).input_features.to(device)
 
-
         """
         fig, axes = plt.subplots(2)
         axes[0].imshow(mel.clone().detach().cpu().squeeze())
@@ -643,7 +644,8 @@ def main():
 
     # base_model = "./whisper-domain"
     # base_model = "openai/whisper-tiny.en"
-    base_model = "openai/whisper-small.en"
+    # base_model = "openai/whisper-small.en"
+    base_model = "openai/whisper-medium.en"
     processor = WhisperProcessor.from_pretrained(
         base_model,
         language="english",
@@ -653,6 +655,7 @@ def main():
     whisper.eval()  # Keep whisper in eval mode since we're not training it
 
     denoiser = Denoiser().to(DEVICE)
+    denoiser.add_input = False
     if PHASE_TO_LOAD is not None:
         saved_object = torch.load(f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[PHASE_TO_LOAD]}.pt")
         denoiser.load_state_dict(saved_object["model"])
@@ -663,7 +666,7 @@ def main():
 
     # Print a transcripting utilizing the denoiser
     path_to_transcribe = f"../backend/data/{LONG_REPORT_NAME}.wav"
-    transcribe(None, path_to_transcribe, processor, whisper, DEVICE)
+    transcribe(denoiser, path_to_transcribe, processor, whisper, DEVICE)
 
 
 def wer(reference: str, hypothesis: str) -> float:
