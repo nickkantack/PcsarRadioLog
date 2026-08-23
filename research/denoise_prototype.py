@@ -251,7 +251,7 @@ def chunk_mel(mel, chunk_size=MEL_CHUNK):
     return chunks, T
 
 
-def validate(model, val_loader, processor, whisper, device, global_step, logits_processor):
+def validate(model, val_loader, processor, whisper, device, global_step, logits_processors=None):
     """Run validation and return average validation loss"""
     if model:
         model.eval()
@@ -307,7 +307,7 @@ def validate(model, val_loader, processor, whisper, device, global_step, logits_
                         num_beams=5,
                         do_sample=False,
                         early_stopping=True,
-                        logits_processor=[logits_processor] if logits_processor is not None else []
+                        logits_processor=logits_processors if logits_processors is not None else []
                     )
 
                 predicted_text = processor.batch_decode(
@@ -325,7 +325,7 @@ def validate(model, val_loader, processor, whisper, device, global_step, logits_
     filename_no_extension = LONG_REPORT_NAME
     with open(f"../backend/data/{filename_no_extension}.txt", "r") as file:
         properties = json.loads(file.read())
-        prediction = transcribe(model, f"../backend/data/{filename_no_extension}.wav", processor, whisper, device, logits_processor)
+        prediction = transcribe(model, f"../backend/data/{filename_no_extension}.wav", processor, whisper, device, logits_processors)
         reference = properties["label"]
         writer.add_text(
             "Examples/Transcript",
@@ -594,7 +594,7 @@ def denoise_to_wav(model, input_wav, output_wav, processor, device):
     model.train()
 
 
-def transcribe(denoiser, input_wav, processor, whisper, device, logits_processor):
+def transcribe(denoiser, input_wav, processor, whisper, device, logits_processors):
 
     if denoiser:
         denoiser.eval()
@@ -630,7 +630,7 @@ def transcribe(denoiser, input_wav, processor, whisper, device, logits_processor
                 num_beams=5,
                 do_sample=False,
                 early_stopping=True,
-                logits_processor=[logits_processor] if logits_processor is not None else []
+                logits_processor=logits_processors if logits_processors is not None else []
             )
 
         text = processor.batch_decode(
@@ -733,7 +733,7 @@ def count_label_ngrams(train_loader, processor,
     return counts
 
 
-def top_ngrams(counts, n=1000):
+def top_ngrams(counts, n):
     return counts.most_common(n)
 
 
@@ -876,13 +876,13 @@ def make_initial_biases(top_phrases, default_bias=1.0):
     }
 
 
-def calibrate_biases(top_phrases, model_counts, biases):
+def calibrate_biases(top_phrases, model_counts, biases, learning_rate):
 
     for phrase, corpus_count in top_phrases:
         model_count = model_counts.get(phrase, 0)
 
         max_abs_shift = 0.2
-        shift = 0.03 * math.log(corpus_count / max(model_count, 1))
+        shift = learning_rate * math.log(corpus_count / max(model_count, 1))
         if abs(shift) > max_abs_shift:
             shift = max_abs_shift if shift > 0 else -max_abs_shift
 
@@ -895,7 +895,7 @@ def calibrate_biases(top_phrases, model_counts, biases):
 
 
 def count_model_ngrams(model, train_loader, processor, 
-                       favored, device, logits_processor, max_len=5):
+                       favored, device, logits_processors, max_len=5):
     """
     Run the unmodified model and count favored phrases in its outputs.
 
@@ -921,7 +921,7 @@ def count_model_ngrams(model, train_loader, processor,
                     num_beams=5,
                     do_sample=False,
                     early_stopping=True,
-                    logits_processor=[logits_processor] if logits_processor is not None else []
+                    logits_processor=logits_processors if logits_processors is not None else []
                 )
 
                 for ids in generated_ids.tolist():
@@ -944,7 +944,7 @@ def count_model_unigrams(
     processor,
     favored,
     device,
-    logits_processor=None,
+    logits_processors=None,
 ):
     counts = Counter()
 
@@ -968,8 +968,8 @@ def count_model_unigrams(
                     do_sample=False,
                     early_stopping=True,
                     logits_processor=(
-                        [logits_processor]
-                        if logits_processor is not None
+                        logits_processors
+                        if logits_processors is not None
                         else []
                     ),
                 )
@@ -994,7 +994,7 @@ def count_model_grams(
     favored_unigrams,
     favored_ngrams,
     device,
-    logits_processor=None,
+    logits_processors=None,
     max_len=5,
 ):
     """
@@ -1030,8 +1030,8 @@ def count_model_grams(
                     do_sample=False,
                     early_stopping=True,
                     logits_processor=(
-                        [logits_processor]
-                        if logits_processor is not None
+                        logits_processors
+                        if logits_processors is not None
                         else []
                     ),
                 )
@@ -1144,7 +1144,7 @@ def run_constrained_generation_experiment(model, processor, whisper, device):
             unigram_phrases,
             top_phrases,
             device,
-            logits_processor=[logits_processor, unigram_logits_processor] if logits_processor is not None else None,
+            logits_processors=[logits_processor, unigram_logits_processor] if logits_processor is not None else None,
             max_len=5,
         )
 
@@ -1152,7 +1152,8 @@ def run_constrained_generation_experiment(model, processor, whisper, device):
         biases = calibrate_biases(
             top_phrases,
             ngram_model_counts,
-            biases
+            biases,
+            learning_rate=1e-2
         )
 
         print("Building trie...")
@@ -1164,13 +1165,13 @@ def run_constrained_generation_experiment(model, processor, whisper, device):
             unigram_phrases,
             unigram_model_counts,
             unigram_biases,
-            max_multiplier=1.5,
+            learning_rate=5e-3
         )
 
         unigram_logits_processor = UnigramLogitBias(unigram_biases)
 
         print("Validating with new trie...")
-        _, average_wer = validate(model, val_loader, processor, whisper, device, i + 1, logits_processor)
+        _, average_wer = validate(model, val_loader, processor, whisper, device, i + 1, [logits_processor, unigram_logits_processor])
         writer.add_scalar("Loss/validation", val_loss, i + 1)
         writer.add_scalar("WER/validation", average_wer, i + 1)
 
