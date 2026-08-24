@@ -31,9 +31,10 @@ VALIDATION_SPLIT = 0.2  # 20% for validation, 80% for training
 BATCH_SIZE = 2
 writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 
-CHECKPOINT_PREFIX = "additive-end_"
+CHECKPOINT_PREFIX = "small-en-0001lr_"
 PHASE_PREFIXES = ["_phase-0_", "_phase-1_", "_phase-2_"]
 PHASE_TO_LOAD = None
+MODEL_TO_LOAD = "small-en-0001lr__phase-2_400ep"
 EPOCHS_PER_PHASE = [0, 0, 400]
 LEARNING_RATES_PER_PHASE = [1e-4, 1e-4, 1e-4]
 
@@ -340,7 +341,7 @@ def validate(model, val_loader, processor, whisper, device, global_step, logits_
     return total_val_loss, average_wer
 
 
-def train(denoiser, processor, whisper):
+def train(denoiser, processor, whisper, optimizer):
 
     # Print model summary early
     """
@@ -370,13 +371,14 @@ def train(denoiser, processor, whisper):
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
     scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
-    global_step = 0
+    global_step = 354000
     for phase in range(PHASE_TO_LOAD + 1 if PHASE_TO_LOAD is not None else 0, 3):
         denoiser.train()
         print(f"================ PHASE {phase} ===============")
         denoiser.add_input = phase > 0
-        optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LEARNING_RATES_PER_PHASE[phase])
-        for epoch in range(EPOCHS_PER_PHASE[phase]):
+        if optimizer is None:
+            optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LEARNING_RATES_PER_PHASE[phase])
+        for epoch in range(400, 400 + EPOCHS_PER_PHASE[phase]):
             denoiser.train()
             batch_num = 0
             for waveforms, texts in loader:
@@ -453,21 +455,20 @@ def train(denoiser, processor, whisper):
 
             # Run validation at the end of each epoch
             print(f"Running validation for epoch {epoch}...")
-            val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step, full_dataset)
+            val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step)
             writer.add_scalar("Loss/validation", val_loss, epoch)
             writer.add_scalar("WER/validation", average_wer, epoch)
             print(f"Validation loss: {val_loss:.4f}")
 
-        torch.save(
-            {
-                "phase": phase,
-                "model": denoiser.state_dict(),
-                # TODO don't save and load the optimizer if we continue to reset it at the start of each
-                # phase and continue to only save models at the end of phases
-                "optimizer": optimizer.state_dict(),
-            },
-            f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[phase]}.pt",
-        )
+            if (epoch + 1) % 20 == 0 or epoch == EPOCHS_PER_PHASE[phase] - 1:
+                torch.save(
+                    {
+                        "phase": phase,
+                        "model": denoiser.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                    },
+                    f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[phase]}{epoch + 1}ep.pt",
+                )
 
 
 def fine_tune_whisper(whisper, processor, device):
@@ -650,8 +651,8 @@ def transcribe(denoiser, input_wav, processor, whisper, device, logits_processor
 def main():
 
     # base_model = "./whisper-domain"
-    base_model = "openai/whisper-tiny.en"
-    # base_model = "openai/whisper-small.en"
+    # base_model = "openai/whisper-tiny.en"
+    base_model = "openai/whisper-small.en"
     processor = WhisperProcessor.from_pretrained(
         base_model,
         language="english",
@@ -661,17 +662,20 @@ def main():
     whisper.eval()  # Keep whisper in eval mode since we're not training it
 
     denoiser = Denoiser().to(DEVICE)
-    denoiser.add_input = False
-    if PHASE_TO_LOAD is not None:
-        saved_object = torch.load(f"{CHECKPOINT_PREFIX}{PHASE_PREFIXES[PHASE_TO_LOAD]}.pt")
+    denoiser.add_input = True
+    denoiser.eval()
+    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
+    if MODEL_TO_LOAD is not None:
+        saved_object = torch.load(f"{MODEL_TO_LOAD}.pt")
+        optimizer.load_state_dict(saved_object["optimizer"])
         denoiser.load_state_dict(saved_object["model"])
+    else:
+        optimizer = None
 
-    run_constrained_generation_experiment(None, processor, whisper, DEVICE)
-
-    return
+    run_constrained_generation_experiment(denoiser, processor, whisper, DEVICE)
 
     # Train
-    train(denoiser, processor, whisper)
+    # train(denoiser, processor, whisper, optimizer)
     # fine_tune_whisper(whisper, processor, DEVICE)
 
 
