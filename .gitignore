@@ -19,3 +19,4 @@ backend/*.ico
 *.pt
 
 research/whisper-domain/
+research/released_models/
