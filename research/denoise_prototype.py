@@ -20,7 +20,7 @@ from transformers import (
 torch.manual_seed(42)
 
 
-MODEL_TO_LOAD = "small-en-0001lr__phase-2_420ep"
+MODEL_TO_LOAD = None
 
 CHUNK_SECONDS = 2
 CHUNK_SAMPLES = SAMPLE_RATE * CHUNK_SECONDS
@@ -150,16 +150,18 @@ def main():
     else:
         optimizer = None
 
-    run_constrained_generation_experiment(denoiser, processor, whisper, DEVICE)
+    # run_constrained_generation_experiment(denoiser, processor, whisper, DEVICE)
 
     # Validate
+    """
     full_dataset = AudioDataset()
     loader = DataLoader(full_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
     val_loss, average_wer = validate(denoiser, loader, processor, whisper, DEVICE, 0)
     print(f"Average WER at top level validation: {100 * average_wer:.1f}%")
+    """
 
     # Train
-    # train(denoiser, processor, whisper, optimizer)
+    train(denoiser, processor, whisper, optimizer, do_normalize=True)
     # fine_tune_whisper(whisper, processor, DEVICE)
 
 

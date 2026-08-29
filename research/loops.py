@@ -153,7 +153,7 @@ def transcribe(denoiser, input_wav, processor, whisper, device, logits_processor
         return text
 
 
-def train(denoiser, processor, whisper, optimizer):
+def train(denoiser, processor, whisper, optimizer, do_normalize=False):
 
     # Print model summary early
     """
@@ -168,7 +168,7 @@ def train(denoiser, processor, whisper, optimizer):
         p.requires_grad = False
 
     # Create single dataset and split into train/validation
-    full_dataset = AudioDataset()
+    full_dataset = AudioDataset(do_normalize=do_normalize)
     total_samples = len(full_dataset)
     validation_count = int(total_samples * VALIDATION_SPLIT)
     train_count = total_samples - validation_count
@@ -261,7 +261,7 @@ def train(denoiser, processor, whisper, optimizer):
         print(f"Running validation for epoch {epoch}...")
         val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step)
         writer.add_scalar("Loss/validation", val_loss, epoch)
-        writer.add_scalar("WER/validation", average_wer, epoch)
+        writer.add_scalar("normalized WER/validation", average_wer, epoch)
         print(f"Validation loss: {val_loss:.4f}")
 
         if (epoch + 1) % 20 == 0 or epoch == EPOCHS_TO_TRAIN - 1:

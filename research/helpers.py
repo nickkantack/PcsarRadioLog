@@ -67,6 +67,7 @@ def wer(reference: str, hypothesis: str, do_normalize=True) -> float:
 
 def normalize_text(text):
     text = text.lower()
+    text = text.replace("-", " ")
     text = re.sub(r"[^\w\s']", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text

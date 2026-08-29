@@ -14,18 +14,9 @@ from faster_whisper import WhisperModel
 import uvicorn
 from common import emit_to_websocket
 
-MODEL_NAME = "tiny.en"
+MODEL_NAME = "small.en"
 
-PROMPT = """
-Fire dispatch, SAR 2 enroute to Hippy Hole.
-10-4
-Fire dispatch, Medic 6.
-Medic 6.
-Have we made contact with the reporting party?
-Negative, Medic 6. Still trying.
-Copy.
-(some time later)
-"""
+PROMPT = """"""
 
 jobs = queue.Queue()
 should_stop_transcriber_thread = False
@@ -58,7 +49,6 @@ def transcriber_worker():
             segments, info = model.transcribe(
                 filename,
                 language="en",
-                initial_prompt=PROMPT,
                 beam_size=5,
                 vad_filter=False,
             )

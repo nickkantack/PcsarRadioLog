@@ -384,8 +384,6 @@ def count_model_grams(
     return unigram_counts, ngram_counts
 
 
-
-
 def run_constrained_generation_experiment(model, processor, whisper, device):
 
     full_dataset = AudioDataset()

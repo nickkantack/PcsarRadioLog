@@ -1,4 +1,5 @@
 from constants import SAMPLE_RATE
+from helpers import normalize_text
 import json
 import os
 import torchaudio
@@ -6,7 +7,7 @@ from torch.utils.data import Dataset
 
 class AudioDataset(Dataset):
 
-    def __init__(self, filenames_sans_extensions=None, size=None):
+    def __init__(self, filenames_sans_extensions=None, size=None, do_normalize=False):
         if filenames_sans_extensions is not None:
             self.filenames_sans_extensions = filenames_sans_extensions
         else:
@@ -27,6 +28,8 @@ class AudioDataset(Dataset):
 
             if size is not None:
                 self.filenames_sans_extensions = self.filenames_sans_extensions[:size]
+
+        self.do_normalize = do_normalize
         
 
     def __len__(self):
@@ -38,6 +41,8 @@ class AudioDataset(Dataset):
         text = ""
         with open(f"../backend/data/{self.filenames_sans_extensions[idx]}.txt", "r") as file:
             text = json.loads(file.read())["label"]
+            if self.do_normalize:
+                text = normalize_text(text)
         if sr != SAMPLE_RATE:
             audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
         audio = audio.mean(0)
