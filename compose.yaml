@@ -1,0 +1,34 @@
+services:
+  vader:
+    build: ./backend
+    command: python vader.py
+    restart: unless-stopped
+    depends_on:
+      - transcriber
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
+    volumes:
+      - ./backend/data:/app/data
+
+  transcriber:
+    build: ./backend
+    command: python transcriber.py
+    restart: unless-stopped
+    volumes:
+      - ./backend/released_models:/app/released_models:ro
+      - ./backend/data:/app/data
+
+  server:
+    build: ./backend
+    command: python server.py
+    restart: unless-stopped
+    ports:
+      - "3011:3011"
+    volumes:
+      - ./backend/data:/app/data
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
