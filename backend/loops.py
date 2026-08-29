@@ -1,4 +1,4 @@
-from constants import SAMPLE_RATE, DEVICE, writer, LONG_REPORT_NAME, DENOISER_LEARNING_RATE, \
+from constants import SAMPLE_RATE, DEVICE, LONG_REPORT_NAME, DENOISER_LEARNING_RATE, \
     BATCH_SIZE, VALIDATION_SPLIT, EPOCHS_TO_TRAIN, CHECKPOINT_PREFIX
 from dataset import AudioDataset
 from helpers import chunk_mel, wer, collate
@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 import torchaudio
 
-def validate(model, val_loader, processor, whisper, device, global_step, logits_processors=None):
+def validate(model, val_loader, processor, whisper, device, global_step, logits_processors=None, writer=None):
     """Run validation and return average validation loss"""
     if model:
         model.eval()
@@ -88,12 +88,13 @@ def validate(model, val_loader, processor, whisper, device, global_step, logits_
         properties = json.loads(file.read())
         prediction = transcribe(model, f"../backend/data/{filename_no_extension}.wav", processor, whisper, device, logits_processors)
         reference = properties["label"]
-        writer.add_text(
-            "Examples/Transcript",
-            f"**Reference:** {reference}\n\n"
-            f"**Prediction:** {prediction}",
-            global_step,
-        )
+        if writer:
+            writer.add_text(
+                "Examples/Transcript",
+                f"**Reference:** {reference}\n\n"
+                f"**Prediction:** {prediction}",
+                global_step,
+            )
 
     if model:
         model.train()
@@ -153,7 +154,7 @@ def transcribe(denoiser, input_wav, processor, whisper, device, logits_processor
         return text
 
 
-def train(denoiser, processor, whisper, optimizer, do_normalize=False):
+def train(denoiser, processor, whisper, optimizer, do_normalize=False, writer=None):
 
     # Print model summary early
     """
@@ -250,7 +251,8 @@ def train(denoiser, processor, whisper, optimizer, do_normalize=False):
             batch_num += 1
 
             batch_loss = batch_loss / len(waveforms)
-            writer.add_scalar("Loss/Train (batch average)", batch_loss, global_step)
+            if writer:
+                writer.add_scalar("Loss/Train (batch average)", batch_loss, global_step)
             batch_loss.backward()
             optimizer.step()
 
@@ -259,9 +261,10 @@ def train(denoiser, processor, whisper, optimizer, do_normalize=False):
 
         # Run validation at the end of each epoch
         print(f"Running validation for epoch {epoch}...")
-        val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step)
-        writer.add_scalar("Loss/validation", val_loss, epoch)
-        writer.add_scalar("normalized WER/validation", average_wer, epoch)
+        val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step, writer=writer)
+        if writer:
+            writer.add_scalar("Loss/validation", val_loss, epoch)
+            writer.add_scalar("normalized WER/validation", average_wer, epoch)
         print(f"Validation loss: {val_loss:.4f}")
 
         if (epoch + 1) % 20 == 0 or epoch == EPOCHS_TO_TRAIN - 1:
@@ -274,7 +277,7 @@ def train(denoiser, processor, whisper, optimizer, do_normalize=False):
             )
 
 
-def fine_tune_whisper(whisper, processor, device):
+def fine_tune_whisper(whisper, processor, device, writer=None):
 
     # Create single dataset and split into train/validation
     full_dataset = AudioDataset()
@@ -338,16 +341,18 @@ def fine_tune_whisper(whisper, processor, device):
 
             batch_num += 1
             global_step += 1
-            writer.add_scalar("Loss/Train", batch_loss, global_step)
+            if writer:
+                writer.add_scalar("Loss/Train", batch_loss, global_step)
 
             print(f"\repoch={epoch + 1}/{num_epochs} batch={batch_num}/{len(loader)}", end="")
         print()
 
         # Run validation at the end of each epoch
         print(f"Running validation for epoch {epoch}...")
-        val_loss, average_wer = validate(None, val_loader, processor, whisper, DEVICE, global_step, full_dataset)
-        writer.add_scalar("Loss/validation", val_loss, epoch)
-        writer.add_scalar("WER/validation", average_wer, epoch)
+        val_loss, average_wer = validate(None, val_loader, processor, whisper, DEVICE, global_step, full_dataset, writer=writer)
+        if writer:
+            writer.add_scalar("Loss/validation", val_loss, epoch)
+            writer.add_scalar("WER/validation", average_wer, epoch)
         print(f"Validation loss: {val_loss:.4f}")
 
         # Save fine-tuned model

@@ -1,10 +1,6 @@
-import os
 import torch
-from torch.utils.tensorboard import SummaryWriter
 
 SAMPLE_RATE = 16000
-
-writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

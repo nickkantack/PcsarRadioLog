@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 
-from constants import SAMPLE_RATE, DEVICE, LONG_REPORT_NAME, BATCH_SIZE
-from constrained_generation import run_constrained_generation_experiment
-from dataset import AudioDataset
-from helpers import collate
-from loops import transcribe, train, validate
+from constants import SAMPLE_RATE, DEVICE, LONG_REPORT_NAME
+from loops import transcribe, train
 
 import torch
 import torch.nn as nn
 from torchinfo import summary
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from transformers import (
     WhisperProcessor,
@@ -128,6 +126,8 @@ class Denoiser(nn.Module):
 
 def main():
 
+    writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
+
     # base_model = "./whisper-domain"
     # base_model = "openai/whisper-tiny.en"
     base_model = "openai/whisper-small.en"
@@ -161,7 +161,7 @@ def main():
     """
 
     # Train
-    train(denoiser, processor, whisper, optimizer, do_normalize=True)
+    train(denoiser, processor, whisper, optimizer, do_normalize=True, writer=writer)
     # fine_tune_whisper(whisper, processor, DEVICE)
 
 

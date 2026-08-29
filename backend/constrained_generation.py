@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from constants import SAMPLE_RATE, writer
+from constants import SAMPLE_RATE
 
 # ---------------------------------------------------------------------------
 # Build the vocabulary of favored phrases
@@ -384,7 +384,7 @@ def count_model_grams(
     return unigram_counts, ngram_counts
 
 
-def run_constrained_generation_experiment(model, processor, whisper, device):
+def run_constrained_generation_experiment(model, processor, whisper, device, writer=None):
 
     full_dataset = AudioDataset()
     total_samples = len(full_dataset)
@@ -481,8 +481,9 @@ def run_constrained_generation_experiment(model, processor, whisper, device):
 
         print("Validating with new trie...")
         _, average_wer = validate(model, val_loader, processor, whisper, device, i + 1, [logits_processor, unigram_logits_processor])
-        writer.add_scalar("Loss/validation", val_loss, i + 1)
-        writer.add_scalar("WER/validation", average_wer, i + 1)
+        if writer:
+            writer.add_scalar("Loss/validation", val_loss, i + 1)
+            writer.add_scalar("WER/validation", average_wer, i + 1)
 
         print(f"After pass {i + 1}/{passes}, WER: {average_wer:.3f}")
 
@@ -490,5 +491,7 @@ def run_constrained_generation_experiment(model, processor, whisper, device):
             pickle.dump(unigram_biases, file)
         with open(f"ngram_biases_{i + 1}.pickle", "wb") as file:
             pickle.dump(biases, file)
+        with open(f"top_phrases_{i + 1}.pickle", "wb") as file:
+            pickle.dump(top_phrases, file)
 
     print("Done")
