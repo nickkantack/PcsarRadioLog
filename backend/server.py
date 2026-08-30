@@ -79,10 +79,7 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:4200",
-        "http://0.0.0.0:4200",
-    ],
+    allow_origins=["http://localhost:4200"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -129,11 +126,11 @@ async def receive_event(event_data: dict):
 
 @app.get("/label/files")
 def label_files():
-    ids = sorted(p.stem for p in Path("/app/data").glob("*.wav"))
+    ids = sorted(p.stem for p in Path("data").glob("*.wav"))
     ids_to_vend = []
     for id in ids:
-        if Path(f"/app/data/{id}.txt").exists():
-            with open(f"/app/data/{id}.txt", "r") as file:
+        if Path(f"data/{id}.txt").exists():
+            with open(f"data/{id}.txt", "r") as file:
                 ob = json.loads(file.read())
                 if "label" not in ob:
                     ids_to_vend.append(id)
@@ -142,8 +139,8 @@ def label_files():
 
 @app.get("/label/item/{item_id}")
 def label_item(item_id: str):
-    txt = Path(f"/app/data/{item_id}.txt")
-    wav = Path(f"/app/data/{item_id}.wav")
+    txt = Path(f"data/{item_id}.txt")
+    wav = Path(f"data/{item_id}.wav")
 
     if not txt.exists() or not wav.exists():
         raise HTTPException(status_code=404)
@@ -160,7 +157,7 @@ def label_item(item_id: str):
 
 @app.post("/label/item/{item_id}")
 def save_label(item_id: str, req: SaveRequest):
-    txt = Path(f"/app/data/{item_id}.txt")
+    txt = Path(f"data/{item_id}.txt")
 
     if not txt.exists():
         raise HTTPException(status_code=404)
@@ -184,14 +181,14 @@ if __name__ == "__main__":
     # TODO attempt to hydrate the segment_buffer with
     # segments from the disk
     now = int(time.time()*1000000)
-    audio_files = os.listdir("/app/data")
+    audio_files = os.listdir("data")
     times = list(map(lambda x: x.split("_")[1], list(filter(lambda x: x[-4:] == ".wav", audio_files))))
     print(times)
     cursor = 1
     while cursor <= 100 and cursor < len(times) - 1 and float(times[-cursor]) > now - 30 * 60 * 1E6:
         cursor += 1
     while cursor > 0:
-        with open(f"/app/data/{audio_files[cursor].replace('.wav', '.txt')}", "r") as file:
+        with open(f"data/{audio_files[cursor].replace('.wav', '.txt')}", "r") as file:
             segment = json.loads(file.read())
             segments_buffer.append(segment)
         cursor -= 1

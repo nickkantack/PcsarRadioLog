@@ -13,7 +13,7 @@ import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
-from common import emit_to_server
+from common import emit_to_websocket
 import torch
 import torchaudio
 from denoise_prototype import Denoiser
@@ -56,15 +56,15 @@ def transcriber_worker():
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
     denoiser.eval()
-    saved_object = torch.load(f"/app/released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_denoiser.pt", map_location=torch.device("cpu"))
+    saved_object = torch.load(f"released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_denoiser.pt")
     denoiser.load_state_dict(saved_object["model"])
 
     ngram_biases = None
     unigram_biases = None
     top_phrases = None
-    with open(f"/app/released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_ngram_biases_30", "rb") as file:
+    with open(f"released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_ngram_biases_30", "rb") as file:
         ngram_biases = pickle.load(file)
-    with open(f"/app/released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_unigram_biases_30", "rb") as file:
+    with open(f"released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_unigram_biases_30", "rb") as file:
         unigram_biases = pickle.load(file)
     # TODO load top phrases too
 
@@ -136,7 +136,7 @@ def transcriber_worker():
                     with open(out_file, "w") as f:
                         json.dump(output, f)
 
-                    emit_to_server(output)
+                    emit_to_websocket(output)
 
             except Exception as e:
                 print(f"Failed to transcribe {filename}: {e}")

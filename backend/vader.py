@@ -8,7 +8,7 @@ import soundfile as sf
 
 from audio_capture import AudioCapture
 from vad import VadState, get_vad_state
-from common import emit_to_transcriber, emit_to_server
+from common import emit_to_transcriber, emit_to_websocket
 
 
 SAMPLE_RATE = 16000
@@ -16,16 +16,11 @@ SAMPLE_RATE = 16000
 AUDIO_BUFFER_MS = 20000
 DECISION_INTERVAL_MS = 1200
 
-TRANSCRIBER_URL = "http://transcriber:8000/transcribe"
+TRANSCRIBER_URL = "http://127.0.0.1:8000/transcribe"
 
 print("Running")
 
-# TODO dynamically set sample rate in line below to one 
-# supported by the chosen device. This is required.
-# transcriber.py will resample to 16000 regardless of
-# the choice here. We just need this to make the underlying
-# device happy so this script doesn't crash.
-audio = AudioCapture(AUDIO_BUFFER_MS, sample_rate=44100)
+audio = AudioCapture(AUDIO_BUFFER_MS)
 audio.resume()
 
 is_speaking = False
@@ -62,7 +57,7 @@ try:
             speech_start = now - DECISION_INTERVAL_MS / 1000 / 2
             is_speaking = True
             is_speaking_unlocks_at = now + 1
-            emit_to_server({
+            emit_to_websocket({
                 "event_type": "SpeechStartEvent",
                 "time": datetime.now().strftime("%F %T")
             })
@@ -72,7 +67,7 @@ try:
             is_speaking = False
             do_save = True
             decision_interval_is_silent = True
-            emit_to_server({
+            emit_to_websocket({
                 "event_type": "SpeechStopEvent",
                 "time": datetime.now().strftime("%F %T")
             })
