@@ -183,8 +183,7 @@ if __name__ == "__main__":
     now = int(time.time()*1000000)
     audio_files = os.listdir("data")
     times = list(map(lambda x: x.split("_")[1], list(filter(lambda x: x[-4:] == ".wav", audio_files))))
-    print(times)
-    cursor = 1
+    cursor = 0
     while cursor <= 100 and cursor < len(times) - 1 and float(times[-cursor]) > now - 30 * 60 * 1E6:
         cursor += 1
     while cursor > 0:

@@ -144,7 +144,7 @@ def main():
     denoiser.eval()
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
     if MODEL_TO_LOAD is not None:
-        saved_object = torch.load(f"{MODEL_TO_LOAD}.pt")
+        saved_object = torch.load(f"{MODEL_TO_LOAD}.pt", map_location=torch.device(DEVICE))
         optimizer.load_state_dict(saved_object["optimizer"])
         denoiser.load_state_dict(saved_object["model"])
     else:

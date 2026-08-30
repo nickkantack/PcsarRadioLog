@@ -56,7 +56,7 @@ def transcriber_worker():
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
     denoiser.eval()
-    saved_object = torch.load(f"released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_denoiser.pt")
+    saved_object = torch.load(f"released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_denoiser.pt", map_location=torch.device(DEVICE))
     denoiser.load_state_dict(saved_object["model"])
 
     ngram_biases = None

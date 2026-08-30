@@ -2,11 +2,17 @@ asyncio
 fastapi
 g2p-en
 httpx
+matplotlib
 numpy
 panphon
+requests
 sentencepiece
+sounddevice
+soundfile
+tensorboard
 torch 
 torchaudio
 torchcodec
+torchinfo
 transformers 
 uvicorn[standard]
