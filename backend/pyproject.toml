@@ -18,7 +18,6 @@ dependencies = [
     "tensorboard",
     "torch",
     "torchaudio",
-    "torchcodec",
     "torchinfo",
     "transformers",
     "uvicorn[standard]"
