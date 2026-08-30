@@ -12,6 +12,12 @@ WORKDIR /app
 COPY pyproject.toml .
 RUN pip install --no-cache-dir .
 
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/torch/lib:${LD_LIBRARY_PATH}
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy the application source.
 COPY *.py .
 COPY *.html .
