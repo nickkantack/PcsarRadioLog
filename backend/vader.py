@@ -25,7 +25,7 @@ print("Running")
 # transcriber.py will resample to 16000 regardless of
 # the choice here. We just need this to make the underlying
 # device happy so this script doesn't crash.
-audio = AudioCapture(AUDIO_BUFFER_MS, sample_rate=44100)
+audio = AudioCapture(AUDIO_BUFFER_MS)
 audio.resume()
 
 is_speaking = False
