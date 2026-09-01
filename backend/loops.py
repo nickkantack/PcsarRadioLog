@@ -266,7 +266,8 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
 
     global_step = 0
 
-    optimizer = torch.optim.AdamW(whisper.parameters(), lr=1e-6, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(
+        (p for p in whisper.parameters() if p.requires_grad), lr=1e-5, weight_decay=0.01)
 
     num_epochs = 100
 

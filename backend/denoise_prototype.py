@@ -5,9 +5,10 @@ from constants import SAMPLE_RATE, DEVICE, LONG_REPORT_NAME, BATCH_SIZE, VALIDAT
 from constrained_generation import run_constrained_generation_experiment
 from dataset import AudioDataset
 from helpers import collate
-from loops import transcribe, train, validate
+from loops import transcribe, train, validate, fine_tune_whisper
 import os
 
+from peft import LoraConfig, get_peft_model
 import torch
 import torch.nn as nn
 from torchinfo import summary
@@ -146,6 +147,15 @@ def main():
     whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
     whisper.eval()  # Keep whisper in eval mode since we're not training it
 
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "v_proj"],
+        bias="none"
+    )
+    whisper = get_peft_model(whisper, lora_config)
+
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
     denoiser.eval()
@@ -183,8 +193,8 @@ def main():
     """
 
     # Train
-    train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
-    # fine_tune_whisper(train_loader, val_loader, whisper, processor, DEVICE)
+    # train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
+    fine_tune_whisper(train_loader, val_loader, whisper, processor, DEVICE, writer=writer)
 
 
     # Print a transcripting utilizing the denoiser

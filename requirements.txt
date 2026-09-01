@@ -5,6 +5,7 @@ httpx
 matplotlib
 numpy
 panphon
+peft
 requests
 sentencepiece
 sounddevice
