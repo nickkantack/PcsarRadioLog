@@ -10,7 +10,7 @@ def main():
         if filename.endswith(".txt"):
             with open(f"../backend/data/{filename}", "r") as file:
                 properties = json.loads(file.read())
-                if "label" in properties:
+                if "label" in properties and properties["label"] != "X":
                     labeled_data.append(properties)
                 else:
                     unlabeled_count += 1

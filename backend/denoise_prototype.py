@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 
-from constants import SAMPLE_RATE, DEVICE, LONG_REPORT_NAME
-from loops import transcribe, train
+from constants import SAMPLE_RATE, DEVICE, LONG_REPORT_NAME, BATCH_SIZE, VALIDATION_SPLIT, \
+    DENOISER_LEARNING_RATE
+from constrained_generation import run_constrained_generation_experiment
+from dataset import AudioDataset
+from helpers import collate
+from loops import transcribe, train, validate
+import os
 
 import torch
 import torch.nn as nn
 from torchinfo import summary
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 
 from transformers import (
@@ -126,6 +131,8 @@ class Denoiser(nn.Module):
 
 def main():
 
+
+
     writer = SummaryWriter(log_dir=f"runs/experiment_{len(os.listdir("runs")) + 1}")
 
     # base_model = "./whisper-domain"
@@ -142,27 +149,42 @@ def main():
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
     denoiser.eval()
-    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=DENOISER_LEARNING_RATE)
     if MODEL_TO_LOAD is not None:
-        saved_object = torch.load(f"{MODEL_TO_LOAD}.pt", map_location=torch.device(DEVICE))
+        saved_object = torch.load(f"released_models/{MODEL_TO_LOAD}/{MODEL_TO_LOAD}_denoiser.pt", map_location=torch.device(DEVICE))
         optimizer.load_state_dict(saved_object["optimizer"])
         denoiser.load_state_dict(saved_object["model"])
     else:
         optimizer = None
 
-    # run_constrained_generation_experiment(denoiser, processor, whisper, DEVICE)
+    # Prep data
+    full_dataset = AudioDataset()
+
+    training_size = 800
+    total_samples = len(full_dataset)
+    print(f"Loaded {total_samples} total samples")
+    validation_count = total_samples - training_size
+    if validation_count / total_samples < VALIDATION_SPLIT:
+        raise Exception(f"training size of {training_size} with a total of {total_samples} samples leaves only {100 * validation_count / total_samples:.1f}% for validation, but you wanted at least {100 * VALIDATION_SPLIT:.0f}%")
+    
+    train_dataset = Subset(full_dataset, range(training_size))
+    val_dataset = Subset(full_dataset, range(training_size, len(full_dataset)))
+    
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
+
+    # Train logit processors
+    # run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
 
     # Validate
     """
-    full_dataset = AudioDataset()
-    loader = DataLoader(full_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
-    val_loss, average_wer = validate(denoiser, loader, processor, whisper, DEVICE, 0)
+    val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, 0)
     print(f"Average WER at top level validation: {100 * average_wer:.1f}%")
     """
 
     # Train
-    train(denoiser, processor, whisper, optimizer, do_normalize=True, writer=writer)
-    # fine_tune_whisper(whisper, processor, DEVICE)
+    train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
+    # fine_tune_whisper(train_loader, val_loader, whisper, processor, DEVICE)
 
 
     # Print a transcripting utilizing the denoiser

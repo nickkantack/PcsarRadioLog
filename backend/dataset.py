@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 
 class AudioDataset(Dataset):
 
-    def __init__(self, filenames_sans_extensions=None, size=None, do_normalize=False):
+    def __init__(self, filenames_sans_extensions=None, do_normalize=False):
         if filenames_sans_extensions is not None:
             self.filenames_sans_extensions = filenames_sans_extensions
         else:
@@ -25,9 +25,6 @@ class AudioDataset(Dataset):
                             self.filenames_sans_extensions.append(candidate)
             
             self.filenames_sans_extensions.sort()
-
-            if size is not None:
-                self.filenames_sans_extensions = self.filenames_sans_extensions[:size]
 
         self.do_normalize = do_normalize
         

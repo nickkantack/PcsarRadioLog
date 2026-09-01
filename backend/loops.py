@@ -154,7 +154,7 @@ def transcribe(denoiser, input_wav, processor, whisper, device, logits_processor
         return text
 
 
-def train(denoiser, processor, whisper, optimizer, do_normalize=False, writer=None):
+def train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=None):
 
     # Print model summary early
     """
@@ -168,21 +168,6 @@ def train(denoiser, processor, whisper, optimizer, do_normalize=False, writer=No
     for p in whisper.parameters():
         p.requires_grad = False
 
-    # Create single dataset and split into train/validation
-    full_dataset = AudioDataset(do_normalize=do_normalize)
-    total_samples = len(full_dataset)
-    validation_count = int(total_samples * VALIDATION_SPLIT)
-    train_count = total_samples - validation_count
-    
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        full_dataset, 
-        [train_count, validation_count],
-        generator=torch.Generator().manual_seed(42)  # For reproducibility
-    )
-    
-    loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
-
     global_step = 0
     denoiser.train()
     if optimizer is None:
@@ -190,7 +175,7 @@ def train(denoiser, processor, whisper, optimizer, do_normalize=False, writer=No
     for epoch in range(EPOCHS_TO_TRAIN):
         denoiser.train()
         batch_num = 0
-        for waveforms, texts in loader:
+        for waveforms, texts in train_loader:
             optimizer.zero_grad()
 
             batch_loss = 0.0
@@ -256,7 +241,7 @@ def train(denoiser, processor, whisper, optimizer, do_normalize=False, writer=No
             batch_loss.backward()
             optimizer.step()
 
-            print(f"\repoch={epoch + 1}/{EPOCHS_TO_TRAIN} batch={batch_num}/{len(loader)} loss={loss.item():.3f}", end="")
+            print(f"\repoch={epoch + 1}/{EPOCHS_TO_TRAIN} batch={batch_num}/{len(train_loader)} loss={loss.item():.3f}", end="")
         print()
 
         # Run validation at the end of each epoch
@@ -277,22 +262,7 @@ def train(denoiser, processor, whisper, optimizer, do_normalize=False, writer=No
             )
 
 
-def fine_tune_whisper(whisper, processor, device, writer=None):
-
-    # Create single dataset and split into train/validation
-    full_dataset = AudioDataset()
-    total_samples = len(full_dataset)
-    validation_count = int(total_samples * VALIDATION_SPLIT)
-    train_count = total_samples - validation_count
-    
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        full_dataset, 
-        [train_count, validation_count],
-        generator=torch.Generator().manual_seed(42)  # For reproducibility
-    )
-    
-    loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
+def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writer=None):
 
     global_step = 0
 
@@ -305,7 +275,7 @@ def fine_tune_whisper(whisper, processor, device, writer=None):
         whisper.train()
 
         batch_num = 0
-        for waveforms, texts in loader:
+        for waveforms, texts in train_loader:
 
             optimizer.zero_grad(set_to_none=True)
 
@@ -344,12 +314,12 @@ def fine_tune_whisper(whisper, processor, device, writer=None):
             if writer:
                 writer.add_scalar("Loss/Train", batch_loss, global_step)
 
-            print(f"\repoch={epoch + 1}/{num_epochs} batch={batch_num}/{len(loader)}", end="")
+            print(f"\repoch={epoch + 1}/{num_epochs} batch={batch_num}/{len(train_loader)}", end="")
         print()
 
         # Run validation at the end of each epoch
         print(f"Running validation for epoch {epoch}...")
-        val_loss, average_wer = validate(None, val_loader, processor, whisper, DEVICE, global_step, full_dataset, writer=writer)
+        val_loss, average_wer = validate(None, val_loader, processor, whisper, DEVICE, global_step, writer=writer)
         if writer:
             writer.add_scalar("Loss/validation", val_loss, epoch)
             writer.add_scalar("WER/validation", average_wer, epoch)

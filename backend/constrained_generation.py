@@ -384,20 +384,7 @@ def count_model_grams(
     return unigram_counts, ngram_counts
 
 
-def run_constrained_generation_experiment(model, processor, whisper, device, writer=None):
-
-    full_dataset = AudioDataset()
-    total_samples = len(full_dataset)
-    validation_count = int(total_samples * VALIDATION_SPLIT)
-    train_count = total_samples - validation_count
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        full_dataset, 
-        [train_count, validation_count],
-        generator=torch.Generator().manual_seed(42)  # For reproducibility
-    )
-    
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
+def run_constrained_generation_experiment(train_loader, val_loader, model, processor, whisper, device, writer=None):
 
     print("Running baseline validation with no logits processor...")
     val_loss, average_wer = validate(model, val_loader, processor, whisper, device, 0, None)
