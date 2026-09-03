@@ -416,7 +416,7 @@ def run_constrained_generation_experiment(train_loader, val_loader, model, proce
 
     print(f"Starting WER: {average_wer:.3f}")
 
-    passes = 60
+    passes = 30
     for i in range(passes):
 
         """

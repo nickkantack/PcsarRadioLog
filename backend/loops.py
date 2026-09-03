@@ -267,9 +267,9 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
     global_step = 0
 
     optimizer = torch.optim.AdamW(
-        (p for p in whisper.parameters() if p.requires_grad), lr=1e-5, weight_decay=0.01)
+        (p for p in whisper.parameters() if p.requires_grad), lr=1e-6, weight_decay=0.01)
 
-    num_epochs = 100
+    num_epochs = 50
 
     for epoch in range(num_epochs):
 
@@ -313,7 +313,7 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
             batch_num += 1
             global_step += 1
             if writer:
-                writer.add_scalar("Loss/Train", batch_loss, global_step)
+                writer.add_scalar("Loss/Train (batch average)", batch_loss, global_step)
 
             print(f"\repoch={epoch + 1}/{num_epochs} batch={batch_num}/{len(train_loader)}", end="")
         print()
@@ -323,7 +323,7 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
         val_loss, average_wer = validate(None, val_loader, processor, whisper, DEVICE, global_step, writer=writer)
         if writer:
             writer.add_scalar("Loss/validation", val_loss, epoch)
-            writer.add_scalar("WER/validation", average_wer, epoch)
+            writer.add_scalar("normalized WER/validation", average_wer, epoch)
         print(f"Validation loss: {val_loss:.4f}")
 
         # Save fine-tuned model

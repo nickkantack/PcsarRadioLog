@@ -17,8 +17,11 @@ backend/*.css
 backend/*.ico
 backend/released_models/
 backend/runs/
+backend/whisper-domain/
 
 *.pt
 
 research/whisper-domain/
 research/released_models/
+
+*.pickle

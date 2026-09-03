@@ -156,6 +156,8 @@ def main():
     )
     whisper = get_peft_model(whisper, lora_config)
 
+    denoiser = None
+    """
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
     denoiser.eval()
@@ -166,6 +168,7 @@ def main():
         denoiser.load_state_dict(saved_object["model"])
     else:
         optimizer = None
+    """
 
     # Prep data
     full_dataset = AudioDataset()
@@ -183,23 +186,20 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
 
-    # Train logit processors
-    # run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
-
-    # Validate
-    """
-    val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, 0)
-    print(f"Average WER at top level validation: {100 * average_wer:.1f}%")
-    """
-
     # Train
     # train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
     fine_tune_whisper(train_loader, val_loader, whisper, processor, DEVICE, writer=writer)
 
+    # Train logit processors
+    run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
+    
+    # Validate
+    val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, 0)
+    print(f"Average WER at top level validation: {100 * average_wer:.1f}%")
 
     # Print a transcripting utilizing the denoiser
     path_to_transcribe = f"../backend/data/{LONG_REPORT_NAME}.wav"
-    transcribe(denoiser, path_to_transcribe, processor, whisper, DEVICE)
+    transcribe(None, path_to_transcribe, processor, whisper, DEVICE)
 
 
 if __name__ == "__main__":

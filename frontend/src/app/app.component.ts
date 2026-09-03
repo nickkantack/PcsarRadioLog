@@ -41,7 +41,7 @@ export class AppComponent {
         private http: HttpClient
     ) {
 
-        this.http.get<any>('http://192.168.1.211:3011/event_buffer')
+        this.http.get<any>(`http://${location.hostname}:3011/event_buffer`)
             .subscribe({
                 next: (response) => {
                     console.log(response);
