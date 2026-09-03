@@ -262,7 +262,7 @@ def train(train_loader, val_loader, denoiser, processor, whisper, optimizer, wri
             )
 
 
-def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writer=None):
+def fine_tune_whisper(denoiser, train_loader, val_loader, whisper, processor, device, writer=None):
 
     global_step = 0
 
@@ -270,6 +270,10 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
         (p for p in whisper.parameters() if p.requires_grad), lr=1e-6, weight_decay=0.01)
 
     num_epochs = 50
+    denoiser_optimizer = None
+    if denoiser is not None:
+        denoiser.train()
+        denoiser_optimizer = torch.optim.AdamW(denoiser.parameters(), lr=DENOISER_LEARNING_RATE)
 
     for epoch in range(num_epochs):
 
@@ -279,6 +283,7 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
         for waveforms, texts in train_loader:
 
             optimizer.zero_grad(set_to_none=True)
+            denoiser_optimizer.zero_grad()
 
             batch_loss = 0.0
             for waveform, transcript in zip(waveforms, texts):
@@ -288,6 +293,33 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
                     sampling_rate=16000,
                     return_tensors="pt",
                 ).input_features
+                input_features = input_features.to(device)
+
+                if denoiser is not None:
+
+                    # Compute the mask of where audio actually is within the
+                    # 30 second mel.
+                    is_audio_mask = torch.where(
+                        input_features > torch.min(input_features), 
+                        torch.ones_like(input_features), 
+                        torch.zeros_like(input_features)
+                    )
+                    is_audio_mask.to(DEVICE)
+                    
+                    chunks, original_length = chunk_mel(input_features)
+
+                    processed = []
+
+                    for chunk in chunks:
+                        # Compute denoised output
+                        denoised_chunk = denoiser(chunk)
+                        processed.append(denoised_chunk)
+                        
+
+                    combined_mel = torch.cat(processed, dim=-1)
+
+                    # Remove padding added by chunk_mel()
+                    input_features = combined_mel[..., :original_length]
 
                 labels = processor.tokenizer(
                     transcript,
@@ -309,6 +341,8 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
             batch_loss = batch_loss / len(waveforms)
             batch_loss.backward()
             optimizer.step()
+            if denoiser is not None:
+                denoiser_optimizer.step()
 
             batch_num += 1
             global_step += 1
@@ -320,7 +354,7 @@ def fine_tune_whisper(train_loader, val_loader, whisper, processor, device, writ
 
         # Run validation at the end of each epoch
         print(f"Running validation for epoch {epoch}...")
-        val_loss, average_wer = validate(None, val_loader, processor, whisper, DEVICE, global_step, writer=writer)
+        val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, global_step, writer=writer)
         if writer:
             writer.add_scalar("Loss/validation", val_loss, epoch)
             writer.add_scalar("normalized WER/validation", average_wer, epoch)

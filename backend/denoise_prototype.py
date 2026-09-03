@@ -157,9 +157,9 @@ def main():
     whisper = get_peft_model(whisper, lora_config)
 
     denoiser = None
-    """
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
+    """
     denoiser.eval()
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=DENOISER_LEARNING_RATE)
     if MODEL_TO_LOAD is not None:
@@ -188,10 +188,10 @@ def main():
 
     # Train
     # train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
-    fine_tune_whisper(train_loader, val_loader, whisper, processor, DEVICE, writer=writer)
+    fine_tune_whisper(denoiser, train_loader, val_loader, whisper, processor, DEVICE, writer=writer)
 
     # Train logit processors
-    run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
+    # run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
     
     # Validate
     val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, 0)
