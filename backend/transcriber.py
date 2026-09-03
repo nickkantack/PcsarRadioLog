@@ -19,6 +19,7 @@ import torchaudio
 from denoise_prototype import Denoiser
 from constants import SAMPLE_RATE
 from constrained_generation import TrieLogitBias, UnigramLogitBias
+from peft import PeftModel
 
 MODEL_NAME = "small.en"
 
@@ -51,7 +52,12 @@ def transcriber_worker():
         task="transcribe"
     )
     whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
-    whisper.eval()  # Keep whisper in eval mode since we're not training it
+    whisper = PeftModel.from_pretrained(
+        whisper,
+        "./whisper-domain"
+    )
+    whisper = whisper.to(DEVICE)
+    whisper.eval()
 
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
