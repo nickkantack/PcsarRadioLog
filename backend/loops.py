@@ -272,18 +272,20 @@ def fine_tune_whisper(denoiser, train_loader, val_loader, whisper, processor, de
     num_epochs = 50
     denoiser_optimizer = None
     if denoiser is not None:
-        denoiser.train()
         denoiser_optimizer = torch.optim.AdamW(denoiser.parameters(), lr=DENOISER_LEARNING_RATE)
 
     for epoch in range(num_epochs):
 
         whisper.train()
+        if denoiser is not None:
+            denoiser.train()
 
         batch_num = 0
         for waveforms, texts in train_loader:
 
             optimizer.zero_grad(set_to_none=True)
-            denoiser_optimizer.zero_grad()
+            if denoiser is not None:
+                denoiser_optimizer.zero_grad()
 
             batch_loss = 0.0
             for waveform, transcript in zip(waveforms, texts):

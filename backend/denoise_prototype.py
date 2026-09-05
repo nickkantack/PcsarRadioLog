@@ -8,7 +8,7 @@ from helpers import collate
 from loops import transcribe, train, validate, fine_tune_whisper
 import os
 
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel
 import torch
 import torch.nn as nn
 from torchinfo import summary
@@ -145,8 +145,16 @@ def main():
         task="transcribe"
     )
     whisper = WhisperForConditionalGeneration.from_pretrained(base_model).to(DEVICE)
-    whisper.eval()  # Keep whisper in eval mode since we're not training it
+    
+    # To load a pretrained LoRA config
+    whisper = PeftModel.from_pretrained(
+        whisper,
+        "./whisper-domain"
+    )
+    whisper = whisper.to(DEVICE)
 
+    # To create a clean new lora_config
+    """
     lora_config = LoraConfig(
         r=16,
         lora_alpha=32,
@@ -155,11 +163,12 @@ def main():
         bias="none"
     )
     whisper = get_peft_model(whisper, lora_config)
+    """
+    whisper.eval()
 
     denoiser = None
     denoiser = Denoiser().to(DEVICE)
     denoiser.add_input = True
-    """
     denoiser.eval()
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=DENOISER_LEARNING_RATE)
     if MODEL_TO_LOAD is not None:
@@ -168,7 +177,6 @@ def main():
         denoiser.load_state_dict(saved_object["model"])
     else:
         optimizer = None
-    """
 
     # Prep data
     full_dataset = AudioDataset()
@@ -187,8 +195,8 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
 
     # Train
-    # train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
-    fine_tune_whisper(denoiser, train_loader, val_loader, whisper, processor, DEVICE, writer=writer)
+    train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
+    # fine_tune_whisper(denoiser, train_loader, val_loader, whisper, processor, DEVICE, writer=writer)
 
     # Train logit processors
     # run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
