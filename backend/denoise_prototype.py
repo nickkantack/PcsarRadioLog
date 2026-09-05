@@ -195,11 +195,13 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
 
     # Train
-    train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
+    # train(train_loader, val_loader, denoiser, processor, whisper, optimizer, writer=writer)
     # fine_tune_whisper(denoiser, train_loader, val_loader, whisper, processor, DEVICE, writer=writer)
 
     # Train logit processors
-    # run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
+    run_constrained_generation_experiment(train_loader, val_loader, denoiser, processor, whisper, DEVICE)
+
+    return
     
     # Validate
     val_loss, average_wer = validate(denoiser, val_loader, processor, whisper, DEVICE, 0)

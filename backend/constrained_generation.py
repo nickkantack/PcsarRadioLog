@@ -44,14 +44,13 @@ def count_label_ngrams(train_loader, processor,
     return counts
 
 
-def top_ngrams(counts, n):
-    return counts.most_common(n)
+def count_how_often_each_top_ngram_was_one_token_away_from_completing(train_loader, processor, prefix_to_top_ngram_map,
+                       min_len=2, max_len=5):
 
-
-def count_label_unigrams(train_loader, processor):
-    counts = Counter()
+    sans_last_token_counts = Counter()
 
     for batch in train_loader:
+
         texts = batch[1]
 
         tokens = processor.tokenizer(
@@ -60,12 +59,20 @@ def count_label_unigrams(train_loader, processor):
             padding=False,
         )["input_ids"]
 
-        for ids in tokens:
-            for token_id in ids:
-                counts[(token_id,)] += 1
+        for sequence in tokens:
+            for start_index in range(len(sequence) - min_len + 1):
+                for end_index in range(start_index + min_len - 1, min(start_index + max_len, len(sequence) - min_len + 1)):
+                    prefix = tuple(tokens[start_index:end_index])
+                    print(prefix)
+                    top_ngrams = prefix_to_top_ngram_map[prefix] if prefix in prefix_to_top_ngram_map else []
+                    for ngram in top_ngrams:
+                        sans_last_token_counts[ngram] += 1
 
-    return counts
+    return sans_last_token_counts
 
+
+def top_ngrams(counts, n):
+    return counts.most_common(n)
 
 
 # ---------------------------------------------------------------------------
@@ -119,23 +126,6 @@ def build_trie(ngrams, biases):
 # LogitsProcessor
 # ---------------------------------------------------------------------------
 
-class UnigramLogitBias(LogitsProcessor):
-    def __init__(self, biases):
-        """
-        biases: {(token_id,): bias}
-        """
-        self.biases = biases
-        self.disabled = False
-
-    def __call__(self, input_ids, scores):
-
-        if self.disabled:
-            return scores
-
-        for (token_id,), bias in self.biases.items():
-            scores[:, token_id] += bias
-
-        return scores
 
 class TrieLogitBias(LogitsProcessor):
     def __init__(self, trie, max_len=5):
@@ -249,74 +239,22 @@ def count_model_ngrams(model, train_loader, processor,
     return counts
 
 
-def count_model_unigrams(
-    model,
-    train_loader,
-    processor,
-    favored,
-    device,
-    logits_processors=None,
-):
-    counts = Counter()
-
-    model.eval()
-
-    special_ids = set(processor.tokenizer.all_special_ids)
-
-    with torch.no_grad():
-        for waveforms, texts in train_loader:
-            for waveform, _ in zip(waveforms, texts):
-
-                mel = processor.feature_extractor(
-                    waveform.numpy(),
-                    sampling_rate=SAMPLE_RATE,
-                    return_tensors="pt",
-                ).input_features.to(device)
-
-                generated_ids = model.generate(
-                    input_features=mel,
-                    num_beams=5,
-                    do_sample=False,
-                    early_stopping=True,
-                    logits_processor=(
-                        logits_processors
-                        if logits_processors is not None
-                        else []
-                    ),
-                )
-
-                for ids in generated_ids.tolist():
-                    for token_id in ids:
-                        if token_id in special_ids:
-                            continue
-
-                        phrase = (token_id,)
-
-                        if phrase in favored:
-                            counts[phrase] += 1
-
-    return counts
-
-
 def count_model_grams(
     model,
     train_loader,
     processor,
-    favored_unigrams,
     favored_ngrams,
     device,
     logits_processors=None,
     max_len=5,
 ):
     """
-    Run the model once and count favored unigrams and ngrams
+    Run the model once and count favored ngrams
     in its generated output.
 
     Returns:
-        unigram_counts: Counter keyed by (token_id,)
         ngram_counts: Counter keyed by token tuples of length 2..max_len
     """
-    unigram_counts = Counter()
     ngram_counts = Counter()
 
     model.eval()
@@ -357,13 +295,6 @@ def count_model_grams(
                         if token_id not in special_ids
                     ]
 
-                    # Unigrams
-                    for token_id in ids:
-                        phrase = (token_id,)
-
-                        if phrase in favored_unigrams:
-                            unigram_counts[phrase] += 1
-
                     # 2-grams through max_len-grams
                     for n in range(2, min(max_len, len(ids)) + 1):
                         for i in range(len(ids) - n + 1):
@@ -381,17 +312,17 @@ def count_model_grams(
 
     print()
 
-    return unigram_counts, ngram_counts
+    return ngram_counts
 
 
 def run_constrained_generation_experiment(train_loader, val_loader, model, processor, whisper, device, writer=None):
 
+    """
     print("Running baseline validation with no logits processor...")
     val_loss, average_wer = validate(model, val_loader, processor, whisper, device, 0, None)
     logits_processor = None
-    unigram_logits_processor = None
     biases = {}
-    unigram_biases = {}
+    """
 
     print("Counting ngrams in labels...")
     counts = count_label_ngrams(
@@ -401,15 +332,63 @@ def run_constrained_generation_experiment(train_loader, val_loader, model, proce
         max_len=5,
     )
 
-    unigram_counts = count_label_unigrams(
+    # Drop all ngrams that didn't occur a minimum number of times
+    min_ngram_freq_to_keep = 10
+    ngrams_to_del = []
+    for ngram, count in counts.items():
+        if count < min_ngram_freq_to_keep:
+            ngrams_to_del.append(ngram)
+    for ngram in ngrams_to_del:
+        del counts[ngram]
+    
+    # Create a map of token sequence to all the top ngrams that need only one more token to complete
+    prefix_to_top_ngram_map = {}
+    for ngram in counts:
+        prefix = ngram[:-1]
+        if prefix not in prefix_to_top_ngram_map:
+            prefix_to_top_ngram_map[prefix] = [ngram]
+        else:
+            prefix_to_top_ngram_map[prefix].append(ngram)
+
+    sans_last_token_counts = count_how_often_each_top_ngram_was_one_token_away_from_completing(
         train_loader,
         processor,
+        prefix_to_top_ngram_map,
+        min_len=2,
+        max_len=5
     )
 
-    unigram_phrases = top_ngrams(
-        unigram_counts,
-        n=1000,
-    )
+    top_ngram_to_completion_probability = {}
+    for ngram, count in counts:
+        opportunity_count = sans_last_token_counts[ngram]
+        top_ngram_to_completion_probability[ngram] = count / opportunity_count
+
+    ngrams_in_completion_probability_order = top_ngram_to_completion_probability.keys()
+    ngrams_in_completion_probability_order = sorted(ngrams_in_completion_probability_order,
+                                                    key=lambda x: ngrams_in_completion_probability_order[x], reverse=True)
+
+    ngram_to_textual_representation = {}
+    for ngram in counts:
+        text = processor.tokenizer.decode(
+            list(ngram),
+            skip_special_tokens=True,
+        )
+        ngram_to_textual_representation[ngram] = text
+    
+    for ngram in ngrams_in_completion_probability_order[:50]:
+        print(f"'{ngram_to_textual_representation[ngram]}' appeared {counts[ngram]} times and completed {100 * top_ngram_to_completion_probability[ngram]:.0f}% of opportunities.")
+
+    return
+
+    # TODO iterate again over the labels and tokenize them, then keep one counter for how often each ngram in 
+    # counts above sees all but its last token (and does not hit the end of the sequence), and how often the 
+    # entire ngram sequence appears. This allows us to compute, for each ngram, what fraction of the time it
+    # appears when the label is one token away from completing the ngram.
+
+    # TODO filter out all ngrams that appeared fewer than some threshold number of times (e.g. 10), then filter
+    # out all ngrams that were continued from their one-token-remaining state with probability below p, where
+    # p is at most 50% (most conservative) and trends downward towards 0% in line with our confidence that 
+    # acoustic information made all model misses a matter of marginal logit value changes (most optimistic).
 
     print("Computing top phrases...")
     top_phrases = top_ngrams(counts, n=1000)
@@ -433,14 +412,13 @@ def run_constrained_generation_experiment(train_loader, val_loader, model, proce
         """
 
         print("Counting ngrams in model output...")
-        unigram_model_counts, ngram_model_counts = count_model_grams(
+        ngram_model_counts = count_model_grams(
             whisper,
             train_loader,
             processor,
-            unigram_phrases,
             top_phrases,
             device,
-            logits_processors=[logits_processor, unigram_logits_processor] if logits_processor is not None else None,
+            logits_processors=[logits_processor] if logits_processor is not None else None,
             max_len=5,
         )
 
@@ -457,25 +435,14 @@ def run_constrained_generation_experiment(train_loader, val_loader, model, proce
 
         logits_processor = TrieLogitBias(trie)
 
-        unigram_biases = calibrate_biases(
-            unigram_phrases,
-            unigram_model_counts,
-            unigram_biases,
-            learning_rate=5e-3
-        )
-
-        unigram_logits_processor = UnigramLogitBias(unigram_biases)
-
         print("Validating with new trie...")
-        _, average_wer = validate(model, val_loader, processor, whisper, device, i + 1, [logits_processor, unigram_logits_processor])
+        _, average_wer = validate(model, val_loader, processor, whisper, device, i + 1, [logits_processor])
         if writer:
             writer.add_scalar("Loss/validation", val_loss, i + 1)
             writer.add_scalar("WER/validation", average_wer, i + 1)
 
         print(f"After pass {i + 1}/{passes}, WER: {average_wer:.3f}")
 
-        with open(f"unigram_biases_{i + 1}.pickle", "wb") as file:
-            pickle.dump(unigram_biases, file)
         with open(f"ngram_biases_{i + 1}.pickle", "wb") as file:
             pickle.dump(biases, file)
         with open(f"top_phrases_{i + 1}.pickle", "wb") as file:
